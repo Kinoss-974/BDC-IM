@@ -4,225 +4,216 @@ import React, { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { supabase } from '../../../../lib/supabase';
 import { 
-  Loader2, Calculator, Home, 
-  Package, ChefHat, Tv, Truck, Wrench, Ruler, 
-  Briefcase, Printer, Info 
+  Calculator, Plus, Trash2, Save, Loader2, Package, 
+  Hammer, Paintbrush, Droplets, Lightbulb, Construction, RefreshCw
 } from 'lucide-react';
 
-export default function RecapPage() {
+export default function FournituresPage() {
   const params = useParams();
   const projectId = params?.id as string;
 
   const [project, setProject] = useState<any>(null);
-  const [pricing, setPricing] = useState<any[]>([]);
+  const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [fournituresTotal, setFournituresTotal] = useState(0);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Ajout de mots-clés (keywords) pour un filtrage ultra-tolérant
+  const categoriesConfig = [
+    { name: 'Fourniture sol', keywords: ['sol', 'sols'], icon: <Hammer size={18} /> },
+    { name: 'Fourniture mur', keywords: ['mur', 'murs', 'peinture'], icon: <Paintbrush size={18} /> },
+    { name: 'Fourniture plafond', keywords: ['plafond', 'plafonds'], icon: <Paintbrush size={18} /> },
+    { name: 'Fourniture SDB', keywords: ['sdb', 'bain', 'sanitaire'], icon: <Droplets size={18} /> },
+    { name: 'Fourniture Cuisine', keywords: ['cuisine', 'cuisines'], icon: <Construction size={18} /> },
+    { name: 'Fourniture Électricité', keywords: ['elec', 'élec', 'electricite', 'électricité'], icon: <Lightbulb size={18} /> },
+    { name: 'Fourniture Plomberie', keywords: ['plomb', 'plomberie'], icon: <Droplets size={18} /> },
+    { name: 'Fourniture Divers', keywords: ['divers', 'autre', 'autres'], icon: <Package size={18} /> }
+  ];
 
   useEffect(() => {
     if (projectId) fetchData();
   }, [projectId]);
 
-  const fetchData = async () => {
+  const fetchData = async (forceRefresh = false) => {
     setLoading(true);
     try {
       const { data: proj } = await supabase.from('projects').select('*').eq('id', projectId).single();
-      const { data: grid } = await supabase.from('pricing_grids').select('*');
-      const { data: items } = await supabase.from('estimate_items').select('*').eq('project_id', projectId);
-      
-      const totalF = items?.reduce((acc, item) => acc + (item.unit_price * item.quantity_to_cover * (1 + item.margin_waste / 100)), 0) || 0;
-
       setProject(proj);
-      setPricing(grid || []);
-      setFournituresTotal(totalF);
-    } catch (error) {
-      console.error("Erreur:", error);
-    }
+
+      if (proj) {
+        const { data: savedItems } = await supabase.from('estimate_items')
+          .select('*')
+          .eq('project_id', projectId)
+          .ilike('category', 'Fourniture%');
+
+        if (savedItems && savedItems.length > 0 && !forceRefresh) {
+          setItems(savedItems);
+        } else {
+          // LIAISON SQL EXACTE
+          const { data: matrix } = await supabase.from('pack_templates')
+            .select('*')
+            .eq('product_type', proj.product_type)   
+            .eq('package_type', proj.package_type)   
+            .eq('property_type', proj.property_type) 
+            .ilike('category', 'Fourniture%');
+
+          // Ajout d'un log pour voir ce qui sort de la matrice
+          console.log("Données trouvées dans la matrice :", matrix);
+
+          if (matrix) {
+            setItems(matrix.map(m => ({
+              id: crypto.randomUUID(),
+              project_id: projectId,
+              category: m.category, // On garde le nom de catégorie d'origine
+              name: m.name,
+              unit_price: parseFloat(m.price) || 0,
+              quantity_to_cover: parseFloat(m.quantity) || 1
+            })));
+          }
+        }
+      }
+    } catch (err) { console.error(err); }
     setLoading(false);
   };
 
-  const getPrice = (cat: string, sub?: string, type?: string) => {
-    const entry = pricing.find(p => 
-      p.category === cat && 
-      (!sub || p.sub_category === sub) && 
-      (!type || p.property_type === type)
-    );
-    return entry ? entry.price : 0;
+  const updateItem = (id: string, field: string, value: any) => {
+    setItems(items.map(i => i.id === id ? { ...i, [field]: value } : i));
   };
 
-  const updateProject = async (updates: any) => {
-    setProject({ ...project, ...updates });
-    await supabase.from('projects').update(updates).eq('id', projectId);
+  const removeItem = (id: string) => {
+    setItems(items.filter(i => i.id !== id));
   };
 
-  if (loading || !project) {
-    return <div className="flex justify-center p-20"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
-  }
+  const addManualItem = (categoryName: string) => {
+    setItems([...items, {
+      id: crypto.randomUUID(),
+      project_id: projectId,
+      category: categoryName,
+      name: '',
+      unit_price: 0,
+      quantity_to_cover: 1
+    }]);
+  };
 
-  // CALCULS
-  const amtAmeublement = getPrice('AMEUBLEMENT', project.package_type, project.property_type);
-  const amtCuisine = getPrice('CUISINE', 'Forfait', project.property_type);
-  const amtElectro = getPrice('ELECTRO', 'Pack Complet', project.property_type);
-  const amtLivraison = getPrice('LIVRAISON', 'Standard', project.property_type);
-  const moSub = project.product_type === "RENO'MALIN" ? "RENO" : "IMMO/DECO";
-  const amtMontage = getPrice('MO_PACKAGE', moSub, project.property_type);
-  const amtSurMesure = getPrice('MO_SUR_MESURE', project.mo_level, project.property_type);
-  const marginCoeff = project.margin || 1.25;
+  const handleSave = async () => {
+    setIsSaving(true);
+    await supabase.from('estimate_items').delete().eq('project_id', projectId).ilike('category', 'Fourniture%');
+    if (items.length > 0) {
+      const toSave = items.map(({ id, ...rest }) => rest);
+      await supabase.from('estimate_items').insert(toSave);
+    }
+    setIsSaving(false);
+    alert("Chiffrage enregistré !");
+  };
 
-  const totalAchatHT = fournituresTotal + amtAmeublement + amtCuisine + amtElectro + amtLivraison + amtMontage + amtSurMesure;
-  const totalVenteHT = (fournituresTotal + amtCuisine + amtElectro) * marginCoeff + amtAmeublement + amtLivraison + amtMontage + amtSurMesure;
+  if (loading) return (
+    <div className="flex flex-col items-center justify-center p-20 space-y-4">
+      <Loader2 className="animate-spin text-blue-600" size={40} />
+      <span className="text-[10px] font-black uppercase text-slate-400">Synchronisation base de données...</span>
+    </div>
+  );
+
+  const totalReel = items.reduce((acc, item) => acc + ((parseFloat(item.unit_price) || 0) * (parseFloat(item.quantity_to_cover) || 0)), 0);
+  const totalVente = totalReel * (parseFloat(project?.margin) || 1.25);
 
   return (
-    <div className="min-h-screen font-sans pb-60 bg-slate-50">
+    <div className="max-w-6xl mx-auto p-6 space-y-8 pb-40 text-slate-900">
       
-      <style jsx global>{`
-        @media print {
-          @page {
-            size: A4;
-            margin: 10mm;
-          }
-          /* Masquer tout l'UI */
-          header, .no-print, .fixed-bar, button, select, nav { 
-            display: none !important; 
-          }
-          /* Forcer l'affichage du contenu sur fond blanc */
-          body, .print-content {
-            background: white !important;
-            padding: 0 !important;
-            margin: 0 !important;
-            display: block !important;
-            visibility: visible !important;
-          }
-          /* Compresser les cartes pour que ça tienne sur 1 page */
-          .recap-card {
-            border: 1px solid #e2e8f0 !important;
-            box-shadow: none !important;
-            margin-bottom: 10px !important;
-            padding: 15px !important;
-            border-radius: 15px !important;
-          }
-          h1 { font-size: 18px !important; margin-bottom: 5px !important; }
-          table th, table td { 
-            padding: 8px 12px !important; 
-            font-size: 11px !important; 
-          }
-          .total-box {
-            padding: 15px !important;
-            margin-top: 10px !important;
-            border-radius: 15px !important;
-          }
-          .total-amount { font-size: 32px !important; }
-        }
-      `}</style>
-
-      {/* Note: Pas de composant <Header /> ici pour éviter le doublon avec le layout global */}
-
-      <div className="max-w-6xl mx-auto p-6 space-y-6 print-content">
-        
-        {/* TITRE ET ACTION */}
-        <div className="flex justify-between items-center bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm recap-card">
-          <div>
-            <h1 className="text-xl font-black tracking-tighter uppercase text-slate-900">Synthèse Financière</h1>
-            <p className="text-slate-400 text-[9px] font-bold uppercase tracking-widest">
-                Projet : {project.name} | Client : {project.client_name || 'N/C'} | {new Date().toLocaleDateString('fr-FR')}
-            </p>
-          </div>
-          <button 
-            onClick={() => window.print()}
-            className="no-print bg-slate-900 text-white px-6 py-3 rounded-xl font-black flex items-center gap-2 hover:bg-blue-600 transition-all shadow-lg text-sm"
-          >
-            <Printer size={18} /> Transmettre au conseiller
-          </button>
-        </div>
-
-        {/* CONFIGURATION DU BIEN */}
-        <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm grid grid-cols-2 md:grid-cols-4 gap-4 recap-card">
-          {[
-            { label: 'Produit', value: project.product_type, icon: Briefcase, key: 'product_type', options: ["IMMO'MALIN", "DECO'MALIN", "RENO'MALIN"] },
-            { label: 'Bien', value: project.property_type, icon: Home, key: 'property_type', options: ['T1', 'T2', 'T3', 'T4', 'T5', 'T6 ou +'] },
-            { label: 'Ameublement', value: project.package_type, icon: Package, key: 'package_type', options: [['LLD', 'LLD'], ['SAISONNIER', 'SAISONNIER']] },
-            { label: 'Travaux', value: project.mo_level, icon: Ruler, key: 'mo_level', options: ['Niveau 1', 'Niveau 2', 'Niveau 3'] }
-          ].map((item, idx) => (
-            <div key={idx} className="space-y-1">
-              <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                <item.icon size={12} className="text-blue-600" /> {item.label}
-              </label>
-              <div className="no-print">
-                <select 
-                  value={item.value} 
-                  onChange={(e) => updateProject({ [item.key]: e.target.value })}
-                  className="w-full p-2 bg-slate-50 border-none rounded-lg font-black text-slate-800 text-xs outline-none cursor-pointer"
-                >
-                  {item.options.map((opt: any) => (
-                    <option key={Array.isArray(opt) ? opt[0] : opt} value={Array.isArray(opt) ? opt[0] : opt}>
-                      {Array.isArray(opt) ? opt[1] : opt}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <p className="hidden print:block font-black text-slate-800 text-sm">{item.value}</p>
-            </div>
-          ))}
-        </div>
-
-        {/* TABLEAU RÉCAPITULATIF */}
-        <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden recap-card">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="bg-slate-50 text-[9px] font-black uppercase text-slate-400 tracking-widest border-b border-slate-100">
-                <th className="px-6 py-4">Poste de dépense</th>
-                <th className="px-6 py-4 text-right">Coût Réel (Achat HT)</th>
-                <th className="px-6 py-4 text-right">Prix Client (Vente HT)</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50 font-bold text-slate-800">
-              {[
-                { label: 'Fournitures', icon: Calculator, achat: fournituresTotal, vente: fournituresTotal * marginCoeff, color: 'text-blue-500' },
-                { label: 'Cuisine', icon: ChefHat, achat: amtCuisine, vente: amtCuisine * marginCoeff, color: 'text-orange-500' },
-                { label: 'Électroménager', icon: Tv, achat: amtElectro, vente: amtElectro * marginCoeff, color: 'text-purple-500' },
-                { label: 'Forfait Ameublement', icon: Package, achat: amtAmeublement, vente: amtAmeublement, color: 'text-slate-400', isFixed: true },
-                { label: 'Livraison & Logistique', icon: Truck, achat: amtLivraison, vente: amtLivraison, color: 'text-slate-400', isFixed: true },
-                { label: 'Montage & Mise en scène', icon: Wrench, achat: amtMontage, vente: amtMontage, color: 'text-slate-400', isFixed: true },
-                { label: 'Main d\'œuvre (Niveau)', icon: Ruler, achat: amtSurMesure, vente: amtSurMesure, color: 'text-slate-400', isFixed: true }
-              ].map((row, idx) => (
-                <tr key={idx} className={row.isFixed ? "bg-slate-50/20" : ""}>
-                  <td className="px-6 py-4 flex items-center gap-3 text-xs">
-                    <row.icon size={16} className={row.color} /> {row.label}
-                  </td>
-                  <td className="px-6 py-4 text-right font-mono text-slate-400 text-xs">{Math.round(row.achat).toLocaleString()} €</td>
-                  <td className={`px-6 py-4 text-right font-mono text-xs ${row.isFixed ? 'text-slate-800' : 'text-blue-600 font-black'}`}>
-                    {Math.round(row.vente).toLocaleString()} €
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* SECTION TOTAUX POUR PDF */}
-        <div className="hidden print:flex justify-between items-center bg-slate-900 text-white p-8 rounded-2xl total-box">
+      {/* HEADER */}
+      <div className="bg-slate-900 rounded-[3rem] p-8 text-white shadow-2xl relative overflow-hidden">
+        <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+          <div className="flex items-center gap-6">
+            <div className="bg-blue-600 p-5 rounded-[2rem] shadow-lg"><Package size={32} /></div>
             <div>
-                <p className="text-[8px] font-black uppercase opacity-50 mb-1 tracking-widest">Total Coût Réel HT</p>
-                <p className="text-xl font-black">{Math.round(totalAchatHT).toLocaleString()} €</p>
+              <h1 className="text-3xl font-black uppercase tracking-tighter italic">Fournitures</h1>
+              <p className="text-blue-300 text-[10px] font-bold uppercase tracking-[0.2em] mt-1 italic">{project?.name}</p>
             </div>
-            <div className="text-right">
-                <p className="text-[8px] font-black uppercase opacity-50 mb-1 tracking-widest">Proposition Client HT</p>
-                <p className="text-4xl font-black total-amount">{Math.round(totalVenteHT).toLocaleString()} €</p>
-            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-3">
+            {[
+              { label: 'Produit', val: project?.product_type },
+              { label: 'Bien', val: project?.property_type },
+              { label: 'Ameublement', val: project?.package_type }
+            ].map((tag, i) => (
+              <div key={i} className="flex flex-col px-5 py-3 rounded-2xl border border-white/10 bg-white/5 backdrop-blur-md min-w-[110px]">
+                <span className="text-[8px] font-black uppercase opacity-60 text-white/70 mb-1">{tag.label}</span>
+                <span className="text-xs font-black uppercase text-white tracking-wide">{tag.val || 'N/C'}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* BARRE FIXE UI (DASHBOARD) */}
-      <div className="fixed bottom-8 left-8 right-8 max-w-6xl mx-auto z-40 no-print">
-        <div className="bg-slate-900 text-white rounded-[2rem] p-8 shadow-2xl flex flex-col md:flex-row justify-between items-center gap-8 border border-white/10">
-          <div className="flex gap-12 items-center">
-            <div>
-              <span className="text-[9px] font-black uppercase text-slate-500 block mb-1 tracking-widest">Coût Réel (Achat HT)</span>
-              <span className="text-2xl font-black font-mono tracking-tighter text-slate-200">{Math.round(totalAchatHT).toLocaleString()} €</span>
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
+        <div className="xl:col-span-8 space-y-6">
+          {categoriesConfig.map((cat) => {
+            // Filtrage ULTRA tolérant avec des mots-clés
+            const catItems = items.filter(i => {
+                if (!i.category) return false;
+                const catLower = i.category.toLowerCase();
+                // Si la catégorie contient un des mots-clés, on l'affiche ici
+                return cat.keywords.some(keyword => catLower.includes(keyword));
+            });
+
+            return (
+              <div key={cat.name} className="bg-white rounded-[2.5rem] border border-slate-100 shadow-sm overflow-hidden">
+                <div className="bg-slate-50/50 p-6 border-b flex justify-between items-center">
+                  <div className="flex items-center gap-4">
+                    <div className="text-blue-600 bg-blue-50 p-3 rounded-2xl">{cat.icon}</div>
+                    <h2 className="font-black text-slate-800 uppercase tracking-widest text-xs">{cat.name}</h2>
+                  </div>
+                  <button onClick={() => addManualItem(cat.name)} className="text-[10px] font-black bg-white border border-slate-200 px-4 py-2 rounded-xl hover:bg-blue-600 hover:text-white transition-all shadow-sm">+ Ajouter</button>
+                </div>
+                <div className="p-4 space-y-3">
+                  {catItems.length === 0 ? (
+                    <div className="py-6 text-center italic text-[10px] font-bold uppercase text-slate-300">Section vide</div>
+                  ) : (
+                    catItems.map((item) => (
+                      <div key={item.id} className="group flex flex-wrap md:flex-nowrap items-center gap-4 bg-slate-50/30 hover:bg-white p-4 rounded-2xl border border-transparent hover:border-slate-100 transition-all">
+                        <input value={item.name} onChange={e => updateItem(item.id, 'name', e.target.value)} className="flex-1 min-w-[200px] font-bold outline-none text-slate-700 text-sm bg-transparent" />
+                        <div className="flex items-center gap-6">
+                          <div className="flex flex-col items-center">
+                            <span className="text-[8px] font-black text-slate-400 uppercase mb-1 text-center">Qté</span>
+                            <input type="number" value={item.quantity_to_cover} onChange={e => updateItem(item.id, 'quantity_to_cover', e.target.value)} className="w-16 bg-white border border-slate-100 p-2 rounded-xl font-black text-center text-xs text-blue-600 outline-none" />
+                          </div>
+                          <div className="flex flex-col items-end">
+                            <span className="text-[8px] font-black text-slate-400 uppercase mb-1">Prix Unitaire</span>
+                            <div className="flex items-center gap-2 bg-white border border-slate-100 p-2 rounded-xl">
+                              <input type="number" value={item.unit_price} onChange={e => updateItem(item.id, 'unit_price', e.target.value)} className="w-20 font-black text-right text-xs outline-none bg-transparent" />
+                              <span className="text-slate-400 font-bold text-xs">€</span>
+                            </div>
+                          </div>
+                          <button onClick={() => removeItem(item.id)} className="text-slate-200 hover:text-red-500 transition-colors"><Trash2 size={18}/></button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* SIDEBAR RÉSUMÉ */}
+        <div className="xl:col-span-4">
+          <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-xl sticky top-28 space-y-6 text-center">
+            <h3 className="text-[11px] font-black uppercase text-slate-400 tracking-[0.2em]">Synthèse</h3>
+            <div className="space-y-6">
+              <div className="flex justify-between items-end border-b border-slate-50 pb-4 text-left">
+                <span className="text-[10px] font-black text-slate-400 uppercase">Total Achat</span>
+                <span className="font-bold text-slate-700 text-lg">{Math.round(totalReel).toLocaleString()} €</span>
+              </div>
+              <div className="p-8 bg-blue-600 rounded-[2rem] text-white shadow-lg relative overflow-hidden">
+                <span className="text-[10px] font-black uppercase opacity-60">Prix de vente</span>
+                <div className="text-5xl font-black italic tracking-tighter mt-1">{Math.round(totalVente).toLocaleString()} €</div>
+              </div>
             </div>
-          </div>
-          <div className="text-center md:text-right">
-            <span className="text-[9px] font-black uppercase text-slate-400 block mb-1 tracking-widest">Proposition Client (Vente HT)</span>
-            <span className="text-6xl font-black text-white font-mono tracking-tighter">{Math.round(totalVenteHT).toLocaleString()} €</span>
+            <button onClick={handleSave} disabled={isSaving} className="w-full bg-slate-900 text-white py-6 rounded-2xl font-black shadow-xl hover:bg-blue-600 transition-all flex justify-center items-center gap-3">
+              {isSaving ? <Loader2 className="animate-spin" /> : <Save size={20} />} SAUVEGARDER
+            </button>
+            <button onClick={() => fetchData(true)} className="w-full text-slate-300 hover:text-orange-600 font-bold text-[9px] uppercase tracking-widest flex justify-center items-center gap-2 transition-colors">
+              <RefreshCw size={12} /> Réinitialiser via la matrice
+            </button>
           </div>
         </div>
       </div>
