@@ -4,24 +4,24 @@ import React, { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { supabase } from '../../../../lib/supabase';
 import { 
-  ChefHat, Plus, Trash2, Save, Loader2, 
-  Calculator, ArrowRight, Settings2, Info
+  ChefHat, Plus, Trash2, Save, Loader2, ListPlus, 
+  Calculator, ShoppingBag, X, Info, CheckSquare, Square
 } from 'lucide-react';
 
 export default function CuisinePage() {
   const params = useParams();
   const projectId = params?.id as string;
-
+  
   const [project, setProject] = useState<any>(null);
-  const [items, setItems] = useState<any[]>([]);
-  const [selectedPropertyType, setSelectedPropertyType] = useState<string>('');
-  const [allPricing, setAllPricing] = useState<any[]>([]);
-  const [currentForfait, setCurrentForfait] = useState(0);
+  const [catalog, setCatalog] = useState<any[]>([]); 
+  const [items, setItems] = useState<any[]>([]);     // Chiffrage (Devis)
+  const [purchases, setPurchases] = useState<any[]>([]); // Achats (Réel)
+  
+  const [forfaitPrice, setForfaitPrice] = useState(0); // Prix de vente (Grille)
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-
-  // Liste des typologies standards
-  const propertyTypes = ['T1', 'T1 Bis', 'T2', 'T3', 'T4', 'T5', 'T6'];
+  const [isSavingPurchases, setIsSavingPurchases] = useState(false);
+  const [isCuisiniste, setIsCuisiniste] = useState(false);
 
   useEffect(() => {
     if (projectId) fetchData();
@@ -29,234 +29,327 @@ export default function CuisinePage() {
 
   const fetchData = async () => {
     setLoading(true);
-    
-    // 1. Charger le projet
     const { data: proj } = await supabase.from('projects').select('*').eq('id', projectId).single();
     
-    // 2. Charger toutes les grilles de prix pour la cuisine
-    const { data: pricingData } = await supabase.from('pricing_grids')
-      .select('*')
-      .eq('category', 'CUISINE');
-
-    // 3. Charger les items déjà enregistrés
-    const { data: savedItems } = await supabase.from('estimate_items')
-      .select('*')
-      .eq('project_id', projectId)
-      .eq('category', 'CUISINE');
-
     if (proj) {
       setProject(proj);
-      setSelectedPropertyType(proj.property_type); // Initialise avec la valeur du récap
-      
-      // Trouver le prix correspondant à la typologie du projet
-      const currentPrice = pricingData?.find(p => p.property_type === proj.property_type)?.price || 0;
-      setCurrentForfait(currentPrice);
-    }
+      setIsCuisiniste(proj.is_cuisine_cuisiniste || false);
 
-    setAllPricing(pricingData || []);
-    setItems(savedItems || []);
+      const { data: grid } = await supabase.from('pricing_grids').select('*').eq('category', 'CUISINE');
+      if (grid) {
+        // On cherche le forfait associé à la typologie du bien
+        const forfait = grid.find(g => (g.item_type === 'FORFAIT' || g.sub_category === 'Forfait') && g.property_type === proj?.property_type);
+        if (forfait) setForfaitPrice(parseFloat(forfait.price) || 0);
+        
+        // On remplit le catalogue avec les articles (hors forfaits)
+        const articles = grid.filter(g => g.item_type === 'ARTICLE' || (g.sub_category && g.sub_category !== 'Forfait'));
+        setCatalog(articles);
+      }
+
+      const { data: savedItems } = await supabase.from('estimate_items').select('*').eq('project_id', projectId).eq('category', 'CUISINE');
+      setItems(savedItems || []);
+
+      const { data: savedPurchases } = await supabase.from('purchase_items').select('*').eq('project_id', projectId).eq('category', 'CUISINE');
+      setPurchases(savedPurchases || []);
+    }
+    
     setLoading(false);
   };
 
-  // Mettre à jour le prix du forfait quand on change la typologie manuellement
-  const handleTypeChange = (newType: string) => {
-    setSelectedPropertyType(newType);
-    const newPrice = allPricing.find(p => p.property_type === newType)?.price || 0;
-    setCurrentForfait(newPrice);
+  const toggleCuisiniste = async () => {
+    const newValue = !isCuisiniste;
+    setIsCuisiniste(newValue);
+    await supabase.from('projects').update({ is_cuisine_cuisiniste: newValue }).eq('id', projectId);
   };
 
-  const addItem = () => {
-    setItems([...items, { 
-      id: crypto.randomUUID(), 
-      project_id: projectId, 
-      category: 'CUISINE', 
-      name: '', 
-      unit_price: 0, 
-      quantity_to_cover: 1 
+  // --- GESTION CHIFFRAGE ---
+  const addItemFromCatalog = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const articleId = e.target.value;
+    if (!articleId) return;
+    const article = catalog.find(a => a.id === articleId);
+    if (article) {
+      setItems([...items, { 
+        id: crypto.randomUUID(), project_id: projectId, category: 'CUISINE', 
+        name: article.sub_category || 'Élément Cuisine', unit_price: article.price, quantity_to_cover: 1 
+      }]);
+    }
+    e.target.value = ""; 
+  };
+
+  const addManualItem = () => setItems([...items, { id: crypto.randomUUID(), project_id: projectId, category: 'CUISINE', name: '', unit_price: 0, quantity_to_cover: 1 }]);
+  const updateItem = (id: string, field: string, value: any) => setItems(items.map(i => i.id === id ? { ...i, [field]: value } : i));
+  const removeItem = (id: string) => setItems(items.filter(i => i.id !== id));
+
+  const handleSaveChiffrage = async () => {
+    setIsSaving(true);
+    await supabase.from('estimate_items').delete().eq('project_id', projectId).eq('category', 'CUISINE');
+    if (items.length > 0) {
+      await supabase.from('estimate_items').insert(items.map(({ id, ...rest }) => rest));
+    }
+    setIsSaving(false);
+    alert("Chiffrage cuisine enregistré !");
+  };
+
+  // --- GESTION ACHATS REELS ---
+  const addPurchase = () => {
+    setPurchases([...purchases, { 
+      id: crypto.randomUUID(), project_id: projectId, category: 'CUISINE', 
+      name: '', reference: '', quantity: 1, unit_price_ht: 0, discount_percent: 0, total_ht: 0 
     }]);
   };
 
-  const updateItem = (id: string, field: string, value: any) => {
-    setItems(items.map(i => i.id === id ? { ...i, [field]: value } : i));
-  };
-
-  const handleSave = async () => {
-    setIsSaving(true);
-    try {
-      await supabase.from('estimate_items').delete().eq('project_id', projectId).eq('category', 'CUISINE');
-      if (items.length > 0) {
-        await supabase.from('estimate_items').insert(items.map(({ id, ...rest }) => rest));
+  const updatePurchase = (id: string, field: string, value: any) => {
+    setPurchases(purchases.map(p => {
+      if (p.id !== id) return p;
+      const updated = { ...p, [field]: value };
+      if (['unit_price_ht', 'quantity', 'discount_percent'].includes(field)) {
+        const basePrice = (parseFloat(updated.unit_price_ht) || 0) * (parseFloat(updated.quantity) || 1);
+        const discount = (parseFloat(updated.discount_percent) || 0) / 100;
+        updated.total_ht = basePrice * (1 - discount);
       }
-      alert("Chiffrage cuisine enregistré !");
-    } catch (error) {
-      console.error(error);
-    }
-    setIsSaving(false);
+      return updated;
+    }));
   };
 
-  if (loading) return (
-    <div className="flex flex-col items-center justify-center p-20 space-y-4">
-      <Loader2 className="animate-spin text-orange-500" size={48} />
-      <p className="text-slate-400 font-bold animate-pulse">CHARGEMENT DU CHIFFRAGE...</p>
-    </div>
-  );
+  const removePurchase = (id: string) => setPurchases(purchases.filter(p => p.id !== id));
 
-  const totalReelHT = items.reduce((acc, item) => acc + (item.unit_price * item.quantity_to_cover), 0);
-  const margin = project?.margin || 1.25;
-  const totalVenteHT = totalReelHT * margin;
+  const handleSavePurchases = async () => {
+    setIsSavingPurchases(true);
+    await supabase.from('purchase_items').delete().eq('project_id', projectId).eq('category', 'CUISINE');
+    if (purchases.length > 0) {
+      const cleanPurchases = purchases.map(({ id, created_at, ...rest }) => rest);
+      await supabase.from('purchase_items').insert(cleanPurchases);
+    }
+    setIsSavingPurchases(false);
+    alert("Achats enregistrés !");
+  };
+
+  if (loading) return <div className="flex justify-center p-20"><Loader2 className="animate-spin text-orange-600" size={40} /></div>;
+
+  const isLocked = project?.status === 'devis_valide' || project?.status === 'devis_traite';
+  const showPurchases = isLocked;
+  const margin = parseFloat(project?.margin) || 1.25;
+
+  // Budget Achat autorisé = Forfait Client / Marge
+  const budgetAchatMax = forfaitPrice / margin;
+
+  const totalAchatEstime = items.reduce((acc, item) => acc + ((parseFloat(item.unit_price) || 0) * (parseFloat(item.quantity_to_cover) || 1)), 0);
+  const totalVenteEstime = totalAchatEstime * margin;
+  const totalAchatReel = purchases.reduce((acc, p) => acc + (parseFloat(p.total_ht) || 0), 0);
 
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-6 pb-40 text-slate-900">
+    <div className={`mx-auto space-y-8 pb-40 ${showPurchases ? 'max-w-full p-6' : 'max-w-5xl'}`}>
       
-      {/* HEADER ULTRA DESIGN */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-xl shadow-slate-200/50">
-        <div className="flex items-center gap-6">
-          <div className="bg-gradient-to-br from-orange-400 to-orange-600 p-5 rounded-[2rem] text-white shadow-lg shadow-orange-200">
-            <ChefHat size={32} strokeWidth={2.5} />
+      {/* HEADER */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm gap-6">
+        <div className="flex items-center gap-4">
+          <div className="bg-orange-600 p-4 rounded-3xl text-white shadow-xl shadow-orange-200">
+            <ChefHat size={28} />
           </div>
           <div>
-            <h1 className="text-3xl font-black tracking-tight text-slate-900 uppercase">Cuisine</h1>
-            <div className="flex items-center gap-2 mt-1">
-              <span className="px-3 py-1 bg-slate-100 text-slate-500 rounded-full text-[10px] font-black uppercase tracking-wider">
-                Projet : {project?.name || 'Sans titre'}
-              </span>
-            </div>
+            <h1 className="text-2xl font-black tracking-tighter uppercase text-slate-900">Cuisine & Mobilier</h1>
+            <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-1">Statut : {project?.status || 'Brouillon'}</p>
           </div>
         </div>
         
-        <button 
-          onClick={addItem}
-          className="group flex items-center gap-3 bg-slate-900 hover:bg-orange-600 text-white px-8 py-4 rounded-2xl font-black transition-all active:scale-95 shadow-xl shadow-slate-200"
-        >
-          <Plus size={20} className="group-hover:rotate-90 transition-transform" />
-          AJOUTER UN ÉLÉMENT
-        </button>
+        {!isLocked && (
+          <div className="flex items-center gap-3 w-full md:w-auto">
+            <div className="relative flex-1 md:flex-none">
+              <ListPlus className="absolute left-4 top-1/2 -translate-y-1/2 text-orange-400" size={18} />
+              <select onChange={addItemFromCatalog} defaultValue="" className="w-full md:w-64 pl-12 pr-4 py-4 bg-slate-50 border-none rounded-2xl font-bold text-xs uppercase text-slate-600 outline-none cursor-pointer hover:bg-slate-100 transition-colors appearance-none">
+                <option value="" disabled>+ Catalogue Rapide</option>
+                {catalog.map(a => <option key={a.id} value={a.id}>{a.sub_category} ({a.price}€)</option>)}
+              </select>
+            </div>
+            <button onClick={addManualItem} className="bg-slate-900 text-white p-4 rounded-2xl hover:bg-orange-600 transition-all shadow-xl"><Plus size={20} /></button>
+          </div>
+        )}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+      <div className={`grid grid-cols-1 ${showPurchases ? 'xl:grid-cols-2' : 'lg:grid-cols-3'} gap-8`}>
         
-        {/* COLONNE GAUCHE : LISTE DES ÉLÉMENTS */}
-        <div className="lg:col-span-8 space-y-4">
-          <div className="flex items-center justify-between px-4">
-            <h2 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em]">Détails des fournitures & pose</h2>
-            <span className="text-[10px] font-bold text-slate-400">{items.length} élément(s)</span>
+        {/* ================= COLONNE GAUCHE : CHIFFRAGE ================= */}
+        <div className={`${showPurchases ? '' : 'lg:col-span-2'} space-y-6`}>
+          
+          {/* HEADER BUDGET AVEC CASE CUISINISTE */}
+          <div className="flex flex-col md:flex-row items-center justify-between mb-2 bg-orange-50 p-6 rounded-3xl border border-orange-100 shadow-sm gap-6">
+             <div className="flex items-center gap-4">
+               <div className="bg-white p-3 rounded-2xl shadow-sm"><Calculator className="text-orange-500" size={24} /></div>
+               <div>
+                 <h2 className="font-black uppercase text-sm tracking-widest text-orange-800">Budget Achat {isLocked && '(FIGÉ)'}</h2>
+                 <p className="text-[9px] font-bold text-orange-500 uppercase mt-0.5">Basé sur le forfait client (- Marge)</p>
+               </div>
+             </div>
+
+             <button 
+                onClick={toggleCuisiniste}
+                disabled={isLocked}
+                className={`flex items-center gap-3 px-5 py-3 rounded-2xl border transition-all ${isCuisiniste ? 'bg-orange-600 border-orange-600 text-white shadow-lg' : 'bg-white border-orange-200 text-orange-600 hover:border-orange-400'}`}
+             >
+                {isCuisiniste ? <CheckSquare size={20} /> : <Square size={20} />}
+                <span className="text-[10px] font-black uppercase tracking-widest">Poste réalisé par un cuisiniste</span>
+             </button>
+
+             <div className="text-right bg-white px-6 py-3 rounded-2xl shadow-sm min-w-[120px]">
+               <span className="font-black text-orange-600 text-2xl">{Math.round(budgetAchatMax).toLocaleString()} €</span>
+             </div>
           </div>
 
-          {items.length === 0 ? (
-            <div className="bg-slate-50 border-2 border-dashed border-slate-200 p-20 rounded-[3rem] text-center">
-              <div className="bg-white w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm">
-                <Calculator className="text-slate-300" size={24} />
+          {isCuisiniste && (
+            <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl flex gap-3 items-center animate-in fade-in slide-in-from-top-2">
+                <Info size={18} className="text-amber-600" />
+                <p className="text-[10px] font-black text-amber-800 uppercase tracking-widest">Note : Ce lot est exclu du pack et sera déduit du récapitulatif client.</p>
+            </div>
+          )}
+
+          <div className="space-y-3">
+            {items.length === 0 ? (
+              <div className="bg-white border border-slate-200 p-12 rounded-[2.5rem] text-center shadow-sm">
+                <p className="text-slate-400 font-bold uppercase text-xs tracking-widest">Aucun chiffrage spécifique</p>
+                <p className="text-slate-400 text-[10px] mt-2 italic">Le forfait par défaut sera appliqué.</p>
               </div>
-              <p className="text-slate-400 font-bold text-sm">Aucun élément saisi pour le moment.</p>
-              <p className="text-slate-300 text-xs mt-1 italic">Le forfait de {currentForfait}€ sera utilisé par défaut.</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {items.map((item) => (
-                <div key={item.id} className="group bg-white p-5 rounded-3xl border border-slate-100 shadow-sm hover:shadow-md hover:border-orange-200 transition-all flex items-center gap-4">
-                  <div className="w-10 h-10 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-400 font-black text-xs group-hover:bg-orange-50 group-hover:text-orange-500 transition-colors">
-                    #
+            ) : (
+              items.map((item) => (
+                <div key={item.id} className={`flex flex-wrap md:flex-nowrap items-center gap-4 p-4 rounded-2xl border transition-all ${isLocked ? 'bg-slate-50/50 border-transparent' : 'bg-white shadow-sm border-slate-200 hover:border-orange-200'}`}>
+                  {isLocked ? (
+                    <span className="flex-1 font-bold text-slate-600 text-sm ml-2">{item.name}</span>
+                  ) : (
+                    <input placeholder="Ex: Meuble bas 60cm..." value={item.name} onChange={e => updateItem(item.id, 'name', e.target.value)} className="flex-1 font-bold outline-none text-sm bg-transparent" />
+                  )}
+
+                  <div className="flex items-center gap-4">
+                    <div className="text-center">
+                      <span className="block text-[8px] font-black text-slate-400 uppercase mb-1">Qté</span>
+                      {isLocked ? (
+                        <span className="w-12 text-center font-black text-xs text-orange-600">{item.quantity_to_cover}</span>
+                      ) : (
+                        <input type="number" value={item.quantity_to_cover || 1} onChange={e => updateItem(item.id, 'quantity_to_cover', e.target.value)} className="w-12 bg-slate-50 rounded-xl p-2 text-center text-xs font-black outline-none" />
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <span className="block text-[8px] font-black text-slate-400 uppercase mb-1">Prix U.</span>
+                      {isLocked ? (
+                        <span className="w-20 font-black text-right text-xs">{item.unit_price} €</span>
+                      ) : (
+                        <div className="flex items-center bg-slate-50 rounded-xl px-2">
+                          <input type="number" value={item.unit_price} onChange={e => updateItem(item.id, 'unit_price', e.target.value)} className="w-16 p-2 text-right text-xs font-black bg-transparent outline-none" />
+                          <span className="text-slate-400 text-[10px] font-bold">€</span>
+                        </div>
+                      )}
+                    </div>
+                    {!isLocked && <button onClick={() => removeItem(item.id)} className="text-slate-300 hover:text-red-500"><Trash2 size={18}/></button>}
                   </div>
-                  <input 
-                    placeholder="Désignation de l'élément (ex: Meuble sous évier...)" 
-                    value={item.name} 
-                    onChange={(e) => updateItem(item.id, 'name', e.target.value)}
-                    className="flex-1 font-bold text-slate-700 placeholder:text-slate-300 outline-none"
-                  />
-                  <div className="flex items-center bg-slate-50 rounded-2xl px-4 py-2 border border-slate-100 focus-within:border-orange-300 transition-colors">
-                    <input 
-                      type="number" 
-                      value={item.unit_price} 
-                      onChange={(e) => updateItem(item.id, 'unit_price', parseFloat(e.target.value) || 0)}
-                      className="w-20 bg-transparent text-right font-black text-slate-900 outline-none"
-                    />
-                    <span className="ml-2 text-slate-400 font-bold">€</span>
-                  </div>
-                  <button 
-                    onClick={() => setItems(items.filter(i => i.id !== item.id))}
-                    className="p-2 text-slate-200 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
-                  >
-                    <Trash2 size={20} />
-                  </button>
                 </div>
-              ))}
-            </div>
+              ))
+            )}
+          </div>
+          
+          {!isLocked && (
+            <button onClick={handleSaveChiffrage} disabled={isSaving} className="w-full bg-slate-900 text-white py-6 rounded-2xl font-black shadow-xl hover:bg-orange-600 transition-all flex justify-center gap-2 mt-4">
+              {isSaving ? <Loader2 className="animate-spin" /> : <Save size={20} />} SAUVEGARDER CHIFFRAGE
+            </button>
           )}
         </div>
 
-        {/* COLONNE DROITE : RÉSUMÉ ET SÉLECTEUR DE FORFAIT */}
-        <div className="lg:col-span-4 space-y-6">
-          
-          {/* CARTE CONFIGURATION FORFAIT */}
-          <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-xl shadow-slate-200/40 space-y-6">
-            <div className="flex items-center gap-3 mb-2">
-              <Settings2 size={18} className="text-orange-500" />
-              <h2 className="font-black text-xs uppercase tracking-widest text-slate-400">Réglage du Forfait</h2>
-            </div>
-
-            <div className="space-y-4">
-              <div className="p-5 bg-slate-50 rounded-3xl border border-slate-100">
-                <label className="block text-[10px] font-black text-slate-400 uppercase mb-3 ml-1">
-                  Typologie de Bien
-                </label>
-                <select 
-                  value={selectedPropertyType}
-                  onChange={(e) => handleTypeChange(e.target.value)}
-                  className="w-full bg-white p-4 rounded-2xl font-black text-slate-900 border border-slate-200 outline-none focus:ring-2 focus:ring-orange-500/20"
-                >
-                  {propertyTypes.map(type => (
-                    <option key={type} value={type}>
-                      {type} {type === project?.property_type ? '(Initial)' : ''}
-                    </option>
-                  ))}
-                </select>
+        {/* RÉSUMÉ BROUILLON */}
+        {!showPurchases && (
+          <div className="lg:col-span-1">
+            <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm h-fit space-y-6 sticky top-28">
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 text-center">
+                <span className="text-[9px] font-black text-slate-400 uppercase block mb-1">Forfait Client (Vente HT)</span>
+                <span className="text-2xl font-black text-slate-700">{forfaitPrice} €</span>
               </div>
-
-              <div className="flex items-center justify-between p-5 bg-orange-50 rounded-3xl border border-orange-100">
-                <span className="text-[10px] font-black text-orange-700 uppercase">Valeur Forfait</span>
-                <span className="text-xl font-black text-orange-600">{currentForfait} € HT</span>
+              <div className="space-y-4 pt-4 border-t border-slate-100">
+                <div className="flex justify-between items-end">
+                  <span className="text-[10px] font-black text-slate-400 uppercase">Budget Achat Max</span>
+                  <span className="font-bold text-slate-700 text-sm">{Math.round(budgetAchatMax).toLocaleString()} €</span>
+                </div>
+                <div className="flex justify-between items-end">
+                  <span className="text-[10px] font-black text-slate-400 uppercase">Total Chiffré</span>
+                  <span className={`font-bold text-sm ${totalAchatEstime > budgetAchatMax ? 'text-red-500 font-black' : 'text-slate-700'}`}>{Math.round(totalAchatEstime).toLocaleString()} €</span>
+                </div>
               </div>
             </div>
+          </div>
+        )}
 
-            <div className="pt-4 space-y-4 border-t border-slate-50">
-              <div className="flex justify-between items-center px-2">
-                <span className="text-[10px] font-black text-slate-400 uppercase">Total Réel Saisi</span>
-                <span className="font-bold text-slate-600">{totalReelHT} € HT</span>
+        {/* SECTION ACHATS RÉELS */}
+        {showPurchases && (
+          <div className="space-y-6">
+            <div className="flex items-center gap-3 mb-6 bg-orange-50 p-4 rounded-2xl border border-orange-100">
+               <ShoppingBag className="text-orange-600" />
+               <h2 className="font-black uppercase text-sm tracking-widest text-orange-900">Dépenses Réelles</h2>
+               <div className="ml-auto text-right">
+                 <span className={`font-black text-lg ${totalAchatReel > budgetAchatMax ? 'text-red-600' : 'text-orange-600'}`}>
+                   {Math.round(totalAchatReel).toLocaleString()} €
+                 </span>
+               </div>
+            </div>
+
+            <div className="bg-white rounded-[2.5rem] border border-orange-100 shadow-sm overflow-hidden mb-6">
+              <div className="bg-orange-50/30 p-6 border-b border-orange-50 flex justify-between items-center">
+                <h3 className="font-black text-orange-900 uppercase text-xs">Articles achetés</h3>
+                <button onClick={addPurchase} className="text-[10px] bg-orange-100 text-orange-700 px-4 py-2 rounded-xl font-black uppercase hover:bg-orange-600 hover:text-white transition-all shadow-sm">
+                  + Ajouter Facture
+                </button>
               </div>
               
-              <div className="p-6 bg-blue-600 rounded-[2rem] text-white shadow-lg shadow-blue-200 relative overflow-hidden">
-                <div className="relative z-10">
-                  <span className="text-[10px] font-black uppercase opacity-60">Prix de Vente Final</span>
-                  <div className="text-4xl font-black tracking-tighter mt-1">
-                    {Math.round(totalVenteHT)} €
-                  </div>
-                  <p className="text-[9px] mt-2 font-bold opacity-80 uppercase tracking-wider">
-                    Marge appliquée : +{Math.round((margin - 1) * 100)}%
-                  </p>
-                </div>
-                <Calculator className="absolute -right-4 -bottom-4 text-white/10" size={100} />
+              <div className="p-4 space-y-4">
+                {purchases.length === 0 ? (
+                    <div className="py-6 text-center italic text-[10px] font-bold uppercase text-slate-300">Aucun achat saisi</div>
+                ) : (
+                  purchases.map((p) => (
+                    <div key={p.id} className="bg-slate-50/50 p-5 rounded-2xl border border-slate-200 space-y-4">
+                      <div className="flex gap-3">
+                        <div className="flex-1">
+                            <span className="block text-[8px] font-black uppercase text-slate-400 mb-1 ml-1">Désignation (Ticket)</span>
+                            <input placeholder="Ex: Meuble sous évier..." value={p.name} onChange={e => updatePurchase(p.id, 'name', e.target.value)} className="w-full bg-white border border-slate-200 p-3 rounded-xl text-xs font-bold outline-none focus:border-orange-300" />
+                        </div>
+                        <div className="w-1/3">
+                            <span className="block text-[8px] font-black uppercase text-slate-400 mb-1 ml-1">Réf / Magasin</span>
+                            <input placeholder="Ex: IKEA" value={p.reference} onChange={e => updatePurchase(p.id, 'reference', e.target.value)} className="w-full bg-white border border-slate-200 p-3 rounded-xl text-xs outline-none focus:border-orange-300" />
+                        </div>
+                        <div className="pt-5">
+                            <button onClick={() => removePurchase(p.id)} className="p-3 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"><Trash2 size={16}/></button>
+                        </div>
+                      </div>
+                      
+                      <div className="flex gap-3 items-end">
+                        <div>
+                          <span className="block text-[8px] font-black uppercase text-slate-400 mb-1 ml-1">Qté</span>
+                          <input type="number" value={p.quantity} onChange={e => updatePurchase(p.id, 'quantity', e.target.value)} className="w-16 bg-white border border-slate-200 p-3 rounded-xl text-xs text-center outline-none focus:border-orange-300 font-black" />
+                        </div>
+                        <div>
+                          <span className="block text-[8px] font-black uppercase text-slate-400 mb-1 ml-1">Prix U. HT</span>
+                          <div className="flex items-center bg-white border border-slate-200 rounded-xl px-2 focus-within:border-orange-300">
+                              <input type="number" value={p.unit_price_ht} onChange={e => updatePurchase(p.id, 'unit_price_ht', e.target.value)} className="w-16 p-2 text-xs text-right outline-none font-black" />
+                              <span className="text-slate-400 text-[10px] font-bold">€</span>
+                          </div>
+                        </div>
+                        <div>
+                          <span className="block text-[8px] font-black uppercase text-slate-400 mb-1 ml-1">Remise</span>
+                          <div className="flex items-center bg-white border border-slate-200 rounded-xl px-2 focus-within:border-orange-300">
+                              <input type="number" value={p.discount_percent} onChange={e => updatePurchase(p.id, 'discount_percent', e.target.value)} className="w-12 p-2 text-xs text-center outline-none font-black text-orange-500" />
+                              <span className="text-orange-400 text-[10px] font-bold">%</span>
+                          </div>
+                        </div>
+                        <div className="flex-1 text-right bg-orange-100/50 border border-orange-200 p-3 rounded-xl flex justify-between items-center">
+                          <span className="text-[9px] font-black uppercase text-orange-600/80">Total Payé HT</span>
+                          <span className="font-black text-orange-700 text-base">{p.total_ht ? parseFloat(p.total_ht).toFixed(2) : '0.00'} €</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
-
-              <button 
-                onClick={handleSave} 
-                disabled={isSaving}
-                className="w-full flex items-center justify-center gap-3 bg-slate-900 hover:bg-green-600 text-white py-6 rounded-2xl font-black transition-all shadow-xl disabled:opacity-50"
-              >
-                {isSaving ? <Loader2 className="animate-spin" /> : <><Save size={20} /> ENREGISTRER LE CHIFFRAGE</>}
-              </button>
             </div>
+            
+            <button onClick={handleSavePurchases} disabled={isSavingPurchases} className="w-full bg-orange-600 hover:bg-orange-700 text-white py-6 rounded-2xl font-black shadow-xl transition-all flex justify-center items-center gap-3">
+              {isSavingPurchases ? <Loader2 className="animate-spin" /> : <Save size={20} />} SAUVEGARDER LES ACHATS
+            </button>
           </div>
+        )}
 
-          {/* PETIT DASHBOARD D'INFO */}
-          {totalReelHT > currentForfait && (
-            <div className="bg-amber-50 p-6 rounded-3xl border border-amber-100 flex gap-4">
-              <Info className="text-amber-500 shrink-0" size={20} />
-              <p className="text-[11px] font-bold text-amber-700 leading-relaxed">
-                Le montant réel ({totalReelHT}€) dépasse le forfait initialement prévu pour un {selectedPropertyType} ({currentForfait}€).
-              </p>
-            </div>
-          )}
-        </div>
       </div>
     </div>
   );

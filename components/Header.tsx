@@ -6,9 +6,9 @@ import {
   LogOut, 
   ShieldCheck, 
   Settings, 
-  LayoutGrid, 
   FolderKanban,
-  Sofa 
+  Sofa,
+  FileText // Import de l'icône pour les devis
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useRouter, usePathname } from 'next/navigation';
@@ -80,12 +80,13 @@ export default function Header() {
           {/* MENUS ADMIN */}
           {userRole === 'ADMIN' && (
             <>
+              {/* NOUVEAU LIEN : DEVIS EN ATTENTE */}
               <Link 
-                href="/admin/templates" 
-                className={`flex items-center gap-2 text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-lg transition-all ${isActive('/admin/templates')}`}
+                href="/admin/devis" 
+                className={`flex items-center gap-2 text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-lg transition-all ${isActive('/admin/devis')}`}
               >
-                <LayoutGrid size={14} />
-                Packs Fournitures
+                <FileText size={14} />
+                Devis en attente
               </Link>
 
               <Link 

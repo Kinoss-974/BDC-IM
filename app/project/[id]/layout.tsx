@@ -1,17 +1,39 @@
 'use client';
 
-import React from 'react';
-import Header from '@/components/Header';
+import React, { useEffect, useState } from 'react';
+import Header from '@/components/Header'; // Vérifie que le chemin vers tes composants est correct
 import Link from 'next/link';
 import { useParams, usePathname } from 'next/navigation';
-import { ArrowLeft, ChefHat, Tv, ClipboardList, Calculator, Package } from 'lucide-react';
+import { 
+  ArrowLeft, ChefHat, Tv, ClipboardList, 
+  Calculator, Package, Truck // Ajout de Truck
+} from 'lucide-react';
+import { supabase } from '@/lib/supabase'; // Vérifie le chemin vers ton client supabase
 
 export default function ProjectLayout({ children }: { children: React.ReactNode }) {
   const params = useParams();
   const pathname = usePathname();
   const id = params?.id as string;
 
-  // Liste des onglets mise à jour
+  const [projectStatus, setProjectStatus] = useState<string | null>(null);
+
+  // Récupération du statut du projet pour l'affichage conditionnel
+  useEffect(() => {
+    if (id) {
+      const getStatus = async () => {
+        const { data } = await supabase
+          .from('projects')
+          .select('status')
+          .eq('id', id)
+          .single();
+        
+        if (data) setProjectStatus(data.status);
+      };
+      getStatus();
+    }
+  }, [id]);
+
+  // Liste des onglets de base
   const tabs = [
     { name: 'Récapitulatif', href: `/project/${id}/recap`, icon: ClipboardList },
     { name: 'Fournitures', href: `/project/${id}/fournitures`, icon: Calculator },
@@ -20,11 +42,17 @@ export default function ProjectLayout({ children }: { children: React.ReactNode 
     { name: 'Électroménager', href: `/project/${id}/electromenager`, icon: Tv },
   ];
 
+  // AJOUT CONDITIONNEL : On ajoute l'onglet Livraison si le projet est validé
+  if (projectStatus === 'devis_valide' || projectStatus === 'devis_traite') {
+    tabs.push({ 
+      name: 'Livraison', 
+      href: `/project/${id}/livraison`, 
+      icon: Truck 
+    });
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900">
-      {/* IMPORTANT : Si le header apparaît 2 fois, 
-          supprime la ligne <Header /> ci-dessous.
-      */}
       <Header />
       
       <div className="bg-white border-b border-slate-200 no-print">

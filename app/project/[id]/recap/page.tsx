@@ -4,216 +4,271 @@ import React, { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { supabase } from '../../../../lib/supabase';
 import { 
-  Calculator, Plus, Trash2, Save, Loader2, Package, 
-  Hammer, Paintbrush, Droplets, Lightbulb, Construction, RefreshCw
+  Loader2, Calculator, Home, 
+  Package, ChefHat, Tv, Truck, Wrench, Ruler, 
+  Briefcase, Printer, Send
 } from 'lucide-react';
 
-export default function FournituresPage() {
+export default function RecapPage() {
   const params = useParams();
   const projectId = params?.id as string;
 
   const [project, setProject] = useState<any>(null);
-  const [items, setItems] = useState<any[]>([]);
+  const [pricing, setPricing] = useState<any[]>([]);
+  const [globalMargin, setGlobalMargin] = useState<number>(1.25);
+  const [purchases, setPurchases] = useState<any[]>([]); 
   const [loading, setLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
-
-  // Ajout de mots-clés (keywords) pour un filtrage ultra-tolérant
-  const categoriesConfig = [
-    { name: 'Fourniture sol', keywords: ['sol', 'sols'], icon: <Hammer size={18} /> },
-    { name: 'Fourniture mur', keywords: ['mur', 'murs', 'peinture'], icon: <Paintbrush size={18} /> },
-    { name: 'Fourniture plafond', keywords: ['plafond', 'plafonds'], icon: <Paintbrush size={18} /> },
-    { name: 'Fourniture SDB', keywords: ['sdb', 'bain', 'sanitaire'], icon: <Droplets size={18} /> },
-    { name: 'Fourniture Cuisine', keywords: ['cuisine', 'cuisines'], icon: <Construction size={18} /> },
-    { name: 'Fourniture Électricité', keywords: ['elec', 'élec', 'electricite', 'électricité'], icon: <Lightbulb size={18} /> },
-    { name: 'Fourniture Plomberie', keywords: ['plomb', 'plomberie'], icon: <Droplets size={18} /> },
-    { name: 'Fourniture Divers', keywords: ['divers', 'autre', 'autres'], icon: <Package size={18} /> }
-  ];
+  const [fournituresTotal, setFournituresTotal] = useState(0);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (projectId) fetchData();
   }, [projectId]);
 
-  const fetchData = async (forceRefresh = false) => {
+  const fetchData = async () => {
     setLoading(true);
     try {
       const { data: proj } = await supabase.from('projects').select('*').eq('id', projectId).single();
-      setProject(proj);
-
-      if (proj) {
-        const { data: savedItems } = await supabase.from('estimate_items')
-          .select('*')
-          .eq('project_id', projectId)
-          .ilike('category', 'Fourniture%');
-
-        if (savedItems && savedItems.length > 0 && !forceRefresh) {
-          setItems(savedItems);
-        } else {
-          // LIAISON SQL EXACTE
-          const { data: matrix } = await supabase.from('pack_templates')
-            .select('*')
-            .eq('product_type', proj.product_type)   
-            .eq('package_type', proj.package_type)   
-            .eq('property_type', proj.property_type) 
-            .ilike('category', 'Fourniture%');
-
-          // Ajout d'un log pour voir ce qui sort de la matrice
-          console.log("Données trouvées dans la matrice :", matrix);
-
-          if (matrix) {
-            setItems(matrix.map(m => ({
-              id: crypto.randomUUID(),
-              project_id: projectId,
-              category: m.category, // On garde le nom de catégorie d'origine
-              name: m.name,
-              unit_price: parseFloat(m.price) || 0,
-              quantity_to_cover: parseFloat(m.quantity) || 1
-            })));
-          }
-        }
+      const { data: grid } = await supabase.from('pricing_grids').select('*');
+      const { data: settings } = await supabase.from('global_settings').select('*');
+      const { data: items } = await supabase.from('estimate_items').select('*').eq('project_id', projectId);
+      const { data: achats } = await supabase.from('purchase_items').select('*').eq('project_id', projectId);
+      
+      if (settings) {
+        const marginSetting = settings.find(s => s.key === 'default_margin');
+        if (marginSetting) setGlobalMargin(parseFloat(marginSetting.value));
       }
-    } catch (err) { console.error(err); }
+
+      const totalF = items?.reduce((acc, item) => {
+        const p = parseFloat(item.unit_price) || 0;
+        const q = parseFloat(item.quantity_to_cover) || 0;
+        return acc + (p * q);
+      }, 0) || 0;
+
+      setProject(proj);
+      setPricing(grid || []);
+      setPurchases(achats || []);
+      setFournituresTotal(totalF);
+    } catch (error) { console.error("Erreur:", error); }
     setLoading(false);
   };
 
-  const updateItem = (id: string, field: string, value: any) => {
-    setItems(items.map(i => i.id === id ? { ...i, [field]: value } : i));
+  const getPrice = (cat: string, sub?: string, type?: string) => {
+    const entry = pricing.find(p => p.category === cat && (!sub || p.sub_category === sub) && (!type || p.property_type === type));
+    return entry ? parseFloat(entry.price) || 0 : 0;
   };
 
-  const removeItem = (id: string) => {
-    setItems(items.filter(i => i.id !== id));
+  const updateProject = async (updates: any) => {
+    setProject((prev: any) => ({ ...prev, ...updates }));
+    await supabase.from('projects').update(updates).eq('id', projectId);
   };
 
-  const addManualItem = (categoryName: string) => {
-    setItems([...items, {
-      id: crypto.randomUUID(),
-      project_id: projectId,
-      category: categoryName,
-      name: '',
-      unit_price: 0,
-      quantity_to_cover: 1
-    }]);
-  };
-
-  const handleSave = async () => {
-    setIsSaving(true);
-    await supabase.from('estimate_items').delete().eq('project_id', projectId).ilike('category', 'Fourniture%');
-    if (items.length > 0) {
-      const toSave = items.map(({ id, ...rest }) => rest);
-      await supabase.from('estimate_items').insert(toSave);
+  const handlePrintAndSubmit = async () => {
+    setIsSubmitting(true);
+    try {
+      if (project?.status === 'brouillon' || !project?.status) {
+        await supabase.from('projects').update({ status: 'en_attente_devis', margin: globalMargin }).eq('id', projectId);
+        setProject((prev: any) => ({ ...prev, status: 'en_attente_devis', margin: globalMargin }));
+      }
+    } catch (error) { console.error(error); } 
+    finally {
+      setIsSubmitting(false);
+      setTimeout(() => window.print(), 300);
     }
-    setIsSaving(false);
-    alert("Chiffrage enregistré !");
   };
 
-  if (loading) return (
-    <div className="flex flex-col items-center justify-center p-20 space-y-4">
-      <Loader2 className="animate-spin text-blue-600" size={40} />
-      <span className="text-[10px] font-black uppercase text-slate-400">Synchronisation base de données...</span>
-    </div>
-  );
+  if (loading || !project) return <div className="flex justify-center p-20"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
 
-  const totalReel = items.reduce((acc, item) => acc + ((parseFloat(item.unit_price) || 0) * (parseFloat(item.quantity_to_cover) || 0)), 0);
-  const totalVente = totalReel * (parseFloat(project?.margin) || 1.25);
+  // --- LOGIQUE DE VERROUILLAGE ---
+  const isChiffrageLocked = project?.status === 'en_attente_devis' || project?.status === 'devis_valide' || project?.status === 'devis_traite';
+  const isSelectionLocked = project?.status === 'devis_valide' || project?.status === 'devis_traite';
+
+  const activeMargin = (!project.status || project.status === 'brouillon') ? globalMargin : (parseFloat(project.margin) || globalMargin);
+  const pType = project.property_type || '';
+  const packType = project.package_type || '';
+  const prodType = project.product_type || '';
+  const moLevel = project.mo_level || '';
+
+  // --- LOGIQUE 1 : Les postes AVEC MARGE (Prix grille = Vente) ---
+  const venteAmeublement = getPrice('AMEUBLEMENT', packType, pType);
+  const venteCuisine = project.is_cuisine_cuisiniste ? 0 : getPrice('CUISINE', 'Forfait', pType);
+  const venteElectro = project.is_electro_cuisiniste ? 0 : getPrice('ELECTRO', 'Pack Complet', pType);
+  
+  const budgetAmeublement = venteAmeublement / activeMargin;
+  const budgetCuisine = venteCuisine / activeMargin;
+  const budgetElectro = venteElectro / activeMargin;
+
+  // --- LOGIQUE 2 : Les postes SANS MARGE (Prix grille = Achat ET Vente) ---
+  const budgetLivraison = getPrice('LIVRAISON', 'Standard', pType);
+  const moSub = prodType === "RENO'MALIN" ? "RENO" : "IMMO/DECO";
+  const budgetMontage = getPrice('MO_PACKAGE', moSub, pType);
+  const budgetSurMesure = getPrice('MO_SUR_MESURE', moLevel, pType);
+
+  const venteLivraison = budgetLivraison;
+  const venteMontage = budgetMontage;
+  const venteSurMesure = budgetSurMesure;
+
+  // Totaux globaux
+  const totalVenteHT = (fournituresTotal * activeMargin) + venteCuisine + venteElectro + venteAmeublement + venteLivraison + venteMontage + venteSurMesure;
+  const totalBudgetAchatHT = fournituresTotal + budgetCuisine + budgetElectro + budgetAmeublement + budgetLivraison + budgetMontage + budgetSurMesure;
+
+  // Dépenses réelles
+  const getDépense = (catPrefix: string) => purchases.filter(p => p.category?.toLowerCase().includes(catPrefix.toLowerCase())).reduce((acc, p) => acc + (parseFloat(p.total_ht) || 0), 0);
+  
+  const rows = [
+    { label: 'Fournitures', icon: Calculator, budget: fournituresTotal, vente: fournituresTotal * activeMargin, depense: getDépense('fourniture'), color: 'text-blue-500' },
+    { label: 'Cuisine', icon: ChefHat, budget: budgetCuisine, vente: venteCuisine, depense: getDépense('cuisine'), color: 'text-orange-500' },
+    { label: 'Électroménager', icon: Tv, budget: budgetElectro, vente: venteElectro, depense: getDépense('electro'), color: 'text-purple-500' },
+    { label: 'Ameublement', icon: Package, budget: budgetAmeublement, vente: venteAmeublement, depense: getDépense('ameublement'), color: 'text-blue-400' },
+    { label: 'Livraison & Logistique', icon: Truck, budget: budgetLivraison, vente: venteLivraison, depense: getDépense('livraison'), color: 'text-slate-400' },
+    { label: 'Montage & Mise en scène', icon: Wrench, budget: budgetMontage, vente: venteMontage, depense: budgetMontage, color: 'text-slate-400' },
+    { label: 'Main d\'œuvre (Niveau)', icon: Ruler, budget: budgetSurMesure, vente: venteSurMesure, depense: budgetSurMesure, color: 'text-slate-400' }
+  ];
 
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-8 pb-40 text-slate-900">
-      
-      {/* HEADER */}
-      <div className="bg-slate-900 rounded-[3rem] p-8 text-white shadow-2xl relative overflow-hidden">
-        <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-          <div className="flex items-center gap-6">
-            <div className="bg-blue-600 p-5 rounded-[2rem] shadow-lg"><Package size={32} /></div>
-            <div>
-              <h1 className="text-3xl font-black uppercase tracking-tighter italic">Fournitures</h1>
-              <p className="text-blue-300 text-[10px] font-bold uppercase tracking-[0.2em] mt-1 italic">{project?.name}</p>
-            </div>
-          </div>
+    <div className="min-h-screen font-sans pb-60 bg-slate-50">
+      <style jsx global>{`
+        @media print {
+          @page { size: A4; margin: 10mm; }
+          header, .no-print, .fixed-bar, button, select, nav { display: none !important; }
+          body, .print-content { background: white !important; padding: 0 !important; margin: 0 !important; display: block !important; visibility: visible !important; }
+          .recap-card { border: 1px solid #e2e8f0 !important; box-shadow: none !important; margin-bottom: 10px !important; padding: 15px !important; border-radius: 15px !important; }
+          h1 { font-size: 18px !important; margin-bottom: 5px !important; }
+          table th, table td { padding: 8px 12px !important; font-size: 11px !important; }
+          .total-box { padding: 15px !important; margin-top: 10px !important; border-radius: 15px !important; }
+          .total-amount { font-size: 32px !important; }
+        }
+      `}</style>
 
-          <div className="flex flex-wrap gap-3">
-            {[
-              { label: 'Produit', val: project?.product_type },
-              { label: 'Bien', val: project?.property_type },
-              { label: 'Ameublement', val: project?.package_type }
-            ].map((tag, i) => (
-              <div key={i} className="flex flex-col px-5 py-3 rounded-2xl border border-white/10 bg-white/5 backdrop-blur-md min-w-[110px]">
-                <span className="text-[8px] font-black uppercase opacity-60 text-white/70 mb-1">{tag.label}</span>
-                <span className="text-xs font-black uppercase text-white tracking-wide">{tag.val || 'N/C'}</span>
-              </div>
-            ))}
+      <div className="max-w-6xl mx-auto p-6 space-y-6 print-content text-slate-900">
+        <div className="flex justify-between items-center bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm recap-card">
+          <div>
+            <h1 className="text-xl font-black tracking-tighter uppercase text-slate-900">
+                {isSelectionLocked ? 'Synthèse & Suivi de Budget' : 'Synthèse Financière'}
+            </h1>
+            <p className="text-slate-400 text-[9px] font-bold uppercase tracking-widest mt-1">
+                Projet : {project.name} | Client : {project.client_name || 'N/C'}
+            </p>
           </div>
+          
+          <button onClick={handlePrintAndSubmit} disabled={isSubmitting} className={`no-print px-6 py-3 rounded-xl font-black flex items-center gap-2 transition-all shadow-lg text-sm ${project.status === 'brouillon' || !project.status ? 'bg-slate-900 hover:bg-blue-600 text-white' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}>
+            {isSubmitting ? <Loader2 className="animate-spin" size={18} /> : (project.status === 'brouillon' || !project.status) ? <Send size={18} /> : <Printer size={18} />}
+            {(project.status === 'brouillon' || !project.status) ? 'VALIDER ET IMPRIMER' : 'IMPRIMER LE RÉCAP'}
+          </button>
+        </div>
+
+        {/* GRILLE DE SÉLECTION DU BIEN */}
+        <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm grid grid-cols-2 md:grid-cols-4 gap-4 recap-card">
+          {[
+            { label: 'Produit', value: prodType, icon: Briefcase, key: 'product_type', options: ["IMMO'MALIN", "DECO'MALIN", "RENO'MALIN"] },
+            { label: 'Bien', value: pType, icon: Home, key: 'property_type', options: ['T1', 'T1 Bis', 'T2', 'T3', 'T4', 'T5', 'T6'] },
+            { label: 'Ameublement', value: packType, icon: Package, key: 'package_type', options: ['LLD', 'SAISONNIER'] },
+            { label: 'Travaux', value: moLevel, icon: Ruler, key: 'mo_level', options: ['Niveau 1', 'Niveau 2', 'Niveau 3'] }
+          ].map((item, idx) => (
+            <div key={idx} className="space-y-1">
+              <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                <item.icon size={12} className="text-blue-600" /> {item.label}
+              </label>
+              <div className="no-print">
+                {isSelectionLocked ? (
+                   <div className="p-2 bg-slate-50 border border-transparent rounded-lg font-black text-slate-600 text-xs">
+                       {item.value || 'N/C'}
+                   </div>
+                ) : (
+                    <select 
+                      value={item.value || ''} 
+                      onChange={(e) => updateProject({ [item.key]: e.target.value })}
+                      className="w-full p-2 bg-slate-50 border border-slate-100 rounded-lg font-black text-slate-800 text-xs outline-none cursor-pointer focus:ring-2 focus:ring-blue-500/20"
+                    >
+                      <option value="" disabled>Sélectionnez...</option>
+                      {item.options.map((opt) => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                )}
+              </div>
+              <p className="hidden print:block font-black text-slate-800 text-sm">{item.value || 'À définir'}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* TABLEAU DE SYNTHÈSE */}
+        <div className="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden recap-card">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                {isSelectionLocked ? (
+                  <tr className="bg-slate-900 text-[9px] font-black uppercase text-white tracking-widest border-b border-slate-100">
+                    <th className="px-6 py-4">Poste de dépense</th>
+                    <th className="px-6 py-4 text-right border-x border-slate-700 text-blue-300">Montant Client (Vente)</th>
+                    <th className="px-6 py-4 text-right">Budget Dispo (Achat)</th>
+                    <th className="px-6 py-4 text-right bg-slate-800 border-l border-slate-700 text-orange-300">Achats Réels</th>
+                    <th className="px-6 py-4 text-right bg-slate-800">Reste Disponible</th>
+                  </tr>
+                ) : (
+                  <tr className="bg-slate-50 text-[9px] font-black uppercase text-slate-400 tracking-widest border-b border-slate-100">
+                    <th className="px-6 py-4">Poste de dépense</th>
+                    <th className="px-6 py-4 text-right">Budget Dispo (Achat HT)</th>
+                    <th className="px-6 py-4 text-right">Montant Client (Vente HT)</th>
+                  </tr>
+                )}
+              </thead>
+              <tbody className="divide-y divide-slate-100 font-bold text-slate-800 text-xs">
+                {rows.map((row, idx) => {
+                  if (!isSelectionLocked) {
+                    return (
+                      <tr key={idx}>
+                        <td className="px-6 py-4 flex items-center gap-3"><row.icon size={16} className={row.color} /> {row.label}</td>
+                        <td className="px-6 py-4 text-right font-mono text-slate-400">{Math.round(row.budget).toLocaleString()} €</td>
+                        <td className="px-6 py-4 text-right font-mono text-blue-600 font-black">{Math.round(row.vente).toLocaleString()} €</td>
+                      </tr>
+                    );
+                  } else {
+                    const reste = row.budget - row.depense;
+                    const isOverBudget = reste < 0 && row.depense > 0;
+                    return (
+                      <tr key={idx} className="hover:bg-slate-50">
+                        <td className="px-6 py-4 flex items-center gap-3"><row.icon size={16} className={row.color} /> {row.label}</td>
+                        <td className="px-6 py-4 text-right border-x border-slate-100 text-blue-600 font-black bg-blue-50/30">{Math.round(row.vente).toLocaleString()} €</td>
+                        <td className="px-6 py-4 text-right font-black">{Math.round(row.budget).toLocaleString()} €</td>
+                        <td className="px-6 py-4 text-right bg-orange-50/30 border-l border-slate-100 text-orange-600 font-black">{row.depense > 0 ? Math.round(row.depense).toLocaleString() + ' €' : '-'}</td>
+                        <td className={`px-6 py-4 text-right font-black ${isOverBudget ? 'bg-red-50 text-red-600' : 'bg-emerald-50/30 text-emerald-600'}`}>
+                          {(row.depense > 0 || row.budget > 0) ? Math.round(reste).toLocaleString() + ' €' : '-'}
+                        </td>
+                      </tr>
+                    );
+                  }
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* TOTAL BOX (PRINT ONLY) */}
+        <div className="hidden print:flex justify-between items-center bg-slate-900 text-white p-8 rounded-2xl total-box">
+            <div>
+                <p className="text-[8px] font-black uppercase opacity-50 mb-1 tracking-widest">Budget Achat Disponible</p>
+                <p className="text-xl font-black">{Math.round(totalBudgetAchatHT).toLocaleString()} €</p>
+            </div>
+            <div className="text-right">
+                <p className="text-[8px] font-black uppercase opacity-50 mb-1 tracking-widest">Facturation Client (Vente HT)</p>
+                <p className="text-4xl font-black total-amount">{Math.round(totalVenteHT).toLocaleString()} €</p>
+            </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
-        <div className="xl:col-span-8 space-y-6">
-          {categoriesConfig.map((cat) => {
-            // Filtrage ULTRA tolérant avec des mots-clés
-            const catItems = items.filter(i => {
-                if (!i.category) return false;
-                const catLower = i.category.toLowerCase();
-                // Si la catégorie contient un des mots-clés, on l'affiche ici
-                return cat.keywords.some(keyword => catLower.includes(keyword));
-            });
-
-            return (
-              <div key={cat.name} className="bg-white rounded-[2.5rem] border border-slate-100 shadow-sm overflow-hidden">
-                <div className="bg-slate-50/50 p-6 border-b flex justify-between items-center">
-                  <div className="flex items-center gap-4">
-                    <div className="text-blue-600 bg-blue-50 p-3 rounded-2xl">{cat.icon}</div>
-                    <h2 className="font-black text-slate-800 uppercase tracking-widest text-xs">{cat.name}</h2>
-                  </div>
-                  <button onClick={() => addManualItem(cat.name)} className="text-[10px] font-black bg-white border border-slate-200 px-4 py-2 rounded-xl hover:bg-blue-600 hover:text-white transition-all shadow-sm">+ Ajouter</button>
-                </div>
-                <div className="p-4 space-y-3">
-                  {catItems.length === 0 ? (
-                    <div className="py-6 text-center italic text-[10px] font-bold uppercase text-slate-300">Section vide</div>
-                  ) : (
-                    catItems.map((item) => (
-                      <div key={item.id} className="group flex flex-wrap md:flex-nowrap items-center gap-4 bg-slate-50/30 hover:bg-white p-4 rounded-2xl border border-transparent hover:border-slate-100 transition-all">
-                        <input value={item.name} onChange={e => updateItem(item.id, 'name', e.target.value)} className="flex-1 min-w-[200px] font-bold outline-none text-slate-700 text-sm bg-transparent" />
-                        <div className="flex items-center gap-6">
-                          <div className="flex flex-col items-center">
-                            <span className="text-[8px] font-black text-slate-400 uppercase mb-1 text-center">Qté</span>
-                            <input type="number" value={item.quantity_to_cover} onChange={e => updateItem(item.id, 'quantity_to_cover', e.target.value)} className="w-16 bg-white border border-slate-100 p-2 rounded-xl font-black text-center text-xs text-blue-600 outline-none" />
-                          </div>
-                          <div className="flex flex-col items-end">
-                            <span className="text-[8px] font-black text-slate-400 uppercase mb-1">Prix Unitaire</span>
-                            <div className="flex items-center gap-2 bg-white border border-slate-100 p-2 rounded-xl">
-                              <input type="number" value={item.unit_price} onChange={e => updateItem(item.id, 'unit_price', e.target.value)} className="w-20 font-black text-right text-xs outline-none bg-transparent" />
-                              <span className="text-slate-400 font-bold text-xs">€</span>
-                            </div>
-                          </div>
-                          <button onClick={() => removeItem(item.id)} className="text-slate-200 hover:text-red-500 transition-colors"><Trash2 size={18}/></button>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* SIDEBAR RÉSUMÉ */}
-        <div className="xl:col-span-4">
-          <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-xl sticky top-28 space-y-6 text-center">
-            <h3 className="text-[11px] font-black uppercase text-slate-400 tracking-[0.2em]">Synthèse</h3>
-            <div className="space-y-6">
-              <div className="flex justify-between items-end border-b border-slate-50 pb-4 text-left">
-                <span className="text-[10px] font-black text-slate-400 uppercase">Total Achat</span>
-                <span className="font-bold text-slate-700 text-lg">{Math.round(totalReel).toLocaleString()} €</span>
-              </div>
-              <div className="p-8 bg-blue-600 rounded-[2rem] text-white shadow-lg relative overflow-hidden">
-                <span className="text-[10px] font-black uppercase opacity-60">Prix de vente</span>
-                <div className="text-5xl font-black italic tracking-tighter mt-1">{Math.round(totalVente).toLocaleString()} €</div>
-              </div>
+      {/* STICKY FOOTER */}
+      <div className="fixed bottom-8 left-8 right-8 max-w-6xl mx-auto z-40 no-print">
+        <div className="bg-slate-900 text-white rounded-[2rem] p-8 shadow-2xl flex flex-col md:flex-row justify-between items-center gap-8 border border-white/10">
+          <div className="flex gap-12 items-center">
+            <div>
+              <span className="text-[9px] font-black uppercase text-slate-500 block mb-1 tracking-widest">Budget Achat Disponible</span>
+              <span className="text-2xl font-black font-mono tracking-tighter text-slate-200">{Math.round(totalBudgetAchatHT).toLocaleString()} €</span>
             </div>
-            <button onClick={handleSave} disabled={isSaving} className="w-full bg-slate-900 text-white py-6 rounded-2xl font-black shadow-xl hover:bg-blue-600 transition-all flex justify-center items-center gap-3">
-              {isSaving ? <Loader2 className="animate-spin" /> : <Save size={20} />} SAUVEGARDER
-            </button>
-            <button onClick={() => fetchData(true)} className="w-full text-slate-300 hover:text-orange-600 font-bold text-[9px] uppercase tracking-widest flex justify-center items-center gap-2 transition-colors">
-              <RefreshCw size={12} /> Réinitialiser via la matrice
-            </button>
+          </div>
+          <div className="text-center md:text-right">
+            <span className="text-[9px] font-black uppercase text-slate-400 block mb-1 tracking-widest">Proposition Client (Vente HT)</span>
+            <span className="text-6xl font-black text-white font-mono tracking-tighter">{Math.round(totalVenteHT).toLocaleString()} €</span>
           </div>
         </div>
       </div>
