@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import { supabase } from '../../../../lib/supabase';
 import { 
   Calculator, Plus, Trash2, Save, Loader2, Package, 
-  Hammer, Paintbrush, Droplets, Lightbulb, Construction, RefreshCw, BookOpen, X, ShoppingBag, Info
+  Hammer, Paintbrush, Droplets, Lightbulb, Construction, RefreshCw, BookOpen, X, ShoppingBag, Briefcase, Home
 } from 'lucide-react';
 
 export default function FournituresPage() {
@@ -74,7 +74,7 @@ export default function FournituresPage() {
         const { data: savedPurchases } = await supabase.from('purchase_items').select('*').eq('project_id', projectId).ilike('category', 'Fourniture%');
         setPurchases(savedPurchases || []);
       }
-    } catch (err) { console.error(err); }
+    } catch (err) { console.error("Erreur lors de la récupération :", err); }
     setLoading(false);
   };
 
@@ -82,47 +82,46 @@ export default function FournituresPage() {
   const removeItem = (id: string) => setItems(items.filter(i => i.id !== id));
   const addManualItem = (categoryName: string) => setItems([...items, { id: crypto.randomUUID(), project_id: projectId, category: categoryName, name: '', unit_price: 0, quantity_to_cover: 1 }]);
   const addItemFromCatalogue = (itemFromCatalogue: any) => {
-    setItems([...items, { id: crypto.randomUUID(), project_id: projectId, category: activeCategoryForModal, name: itemFromCatalogue.name, unit_price: parseFloat(itemFromCatalogue.price) || 0, quantity_to_cover: parseFloat(itemFromCatalogue.quantity) || 1 }]);
+    setItems([...items, { id: crypto.randomUUID(), project_id: projectId, category: activeCategoryForModal, name: itemFromCatalogue.name, unit_price: parseFloat(itemFromCatalogue.price) || 0, quantity_to_cover: 1 }]);
     setIsModalOpen(false);
   };
 
-  // --- SAUVEGARDE CHIFFRAGE (DEVIS) ---
   const handleSaveChiffrage = async () => {
     setIsSaving(true);
     try {
       await supabase.from('estimate_items').delete().eq('project_id', projectId).ilike('category', 'Fourniture%');
+      
       if (items.length > 0) {
-        const cleanItems = items.map(item => ({
+        const toSave = items.map(item => ({
           project_id: projectId,
-          category: item.category,
+          category: item.category || 'Fourniture Divers',
           name: item.name || 'Article sans nom',
           unit_price: parseFloat(item.unit_price) || 0,
           quantity_to_cover: parseFloat(item.quantity_to_cover) || 0
         }));
-        const { error } = await supabase.from('estimate_items').insert(cleanItems);
+
+        const { error } = await supabase.from('estimate_items').insert(toSave);
         if (error) throw error;
       }
       alert("✅ Chiffrage enregistré !");
+      fetchData(); 
     } catch (err: any) {
-      alert("❌ Erreur sauvegarde : " + err.message);
+      alert("❌ Erreur : " + err.message);
     } finally {
       setIsSaving(false);
     }
   };
 
-  // --- GESTION DES ACHATS ---
   const addPurchase = (categoryName: string) => {
-    setPurchases([...purchases, { id: crypto.randomUUID(), project_id: projectId, category: categoryName, name: '', reference: '', quantity: 1, unit_price_ht: 0, discount_percent: 0, total_ht: 0 }]);
+    setPurchases([...purchases, { id: crypto.randomUUID(), project_id: projectId, category: categoryName, name: '', reference: '', quantity: 1, unit_price_ht: 0, total_ht: 0 }]);
   };
 
   const updatePurchase = (id: string, field: string, value: any) => {
     setPurchases(purchases.map(p => {
       if (p.id !== id) return p;
       const updated = { ...p, [field]: value };
-      if (['unit_price_ht', 'quantity', 'discount_percent'].includes(field)) {
-        const basePrice = (parseFloat(updated.unit_price_ht) || 0) * (parseFloat(updated.quantity) || 1);
-        const discount = (parseFloat(updated.discount_percent) || 0) / 100;
-        updated.total_ht = basePrice * (1 - discount);
+      if (['unit_price_ht', 'quantity'].includes(field)) {
+        updated.total_ht = (parseFloat(updated.unit_price_ht) || 0) * (parseFloat(updated.quantity) || 1);
       }
       return updated;
     }));
@@ -130,26 +129,25 @@ export default function FournituresPage() {
 
   const removePurchase = (id: string) => setPurchases(purchases.filter(p => p.id !== id));
 
-  // --- SAUVEGARDE ACHATS ---
   const handleSavePurchases = async () => {
     setIsSavingPurchases(true);
     try {
       await supabase.from('purchase_items').delete().eq('project_id', projectId).ilike('category', 'Fourniture%');
       if (purchases.length > 0) {
-        const cleanPurchases = purchases.map(p => ({
+        const toSavePurchases = purchases.map(p => ({
           project_id: projectId,
           category: p.category,
           name: p.name || 'Achat sans nom',
           reference: p.reference || '',
           quantity: parseFloat(p.quantity) || 0,
           unit_price_ht: parseFloat(p.unit_price_ht) || 0,
-          discount_percent: parseFloat(p.discount_percent) || 0,
           total_ht: parseFloat(p.total_ht) || 0
         }));
-        const { error } = await supabase.from('purchase_items').insert(cleanPurchases);
+        const { error } = await supabase.from('purchase_items').insert(toSavePurchases);
         if (error) throw error;
       }
       alert("✅ Achats enregistrés !");
+      fetchData();
     } catch (err: any) {
       alert("❌ Erreur achats : " + err.message);
     } finally {
@@ -179,35 +177,51 @@ export default function FournituresPage() {
   return (
     <div className={`mx-auto p-6 space-y-8 pb-40 text-slate-900 ${showPurchases ? 'max-w-full' : 'max-w-6xl'}`}>
       
-      {/* HEADER */}
+      {/* HEADER AVEC INFOS PROJET COMPLÈTES */}
       <div className="bg-slate-900 rounded-[3rem] p-8 text-white shadow-2xl relative overflow-hidden border border-white/5">
-        <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+        <div className="relative z-10 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
           <div className="flex items-center gap-6">
-            <div className="bg-blue-600 p-5 rounded-[2rem] shadow-lg shadow-blue-500/20"><Hammer size={32} /></div>
+            <div className="bg-blue-600 p-5 rounded-[2rem] shadow-lg shadow-blue-500/20">
+              <Hammer size={32} />
+            </div>
             <div>
               <h1 className="text-3xl font-black uppercase tracking-tighter italic">Fournitures</h1>
-              <p className="text-blue-400 text-[10px] font-bold uppercase tracking-[0.2em] mt-1">{project?.name} | Statut : {project?.status || 'Brouillon'}</p>
+              <p className="text-blue-400 text-[10px] font-bold uppercase tracking-[0.2em] mt-1">
+                {project?.name} | {project?.status?.replace('_', ' ')}
+              </p>
             </div>
           </div>
+          
+          {/* BLOCS INFOS DYNAMIQUES */}
           <div className="flex flex-wrap gap-3">
-            <div className="flex flex-col px-5 py-3 rounded-2xl border border-white/10 backdrop-blur-sm min-w-[110px]">
-              <span className="text-[8px] font-black uppercase opacity-60 text-white/70 mb-1">Bien</span>
-              <span className="text-xs font-black uppercase text-white tracking-wide">{project?.property_type || 'N/C'}</span>
-            </div>
+            {[
+              { label: 'Type de Produit', value: project?.product_type, icon: Briefcase },
+              { label: 'Type de Bien', value: project?.property_type, icon: Home },
+              { label: 'Ameublement', value: project?.package_type, icon: Package }
+            ].map((info, idx) => (
+              <div key={idx} className="flex flex-col px-5 py-3 rounded-2xl border border-white/10 backdrop-blur-sm min-w-[120px] bg-white/5">
+                <span className="text-[7px] font-black uppercase opacity-60 text-white/70 mb-1 flex items-center gap-1.5">
+                  <info.icon size={8} className="text-blue-400" /> {info.label}
+                </span>
+                <span className="text-xs font-black uppercase text-white tracking-wide">
+                  {info.value || 'N/C'}
+                </span>
+              </div>
+            ))}
           </div>
         </div>
       </div>
 
       <div className={`grid grid-cols-1 ${showPurchases ? 'xl:grid-cols-2' : 'xl:grid-cols-12'} gap-8`}>
         
-        {/* CHIFFRAGE */}
+        {/* COLONNE GAUCHE : CHIFFRAGE */}
         <div className={`${showPurchases ? '' : 'xl:col-span-8'} space-y-6`}>
           <div className="flex flex-col md:flex-row items-center justify-between mb-2 bg-blue-50 p-6 rounded-3xl border border-blue-100 shadow-sm gap-4">
              <div className="flex items-center gap-4">
                <div className="bg-white p-3 rounded-2xl shadow-sm"><Calculator className="text-blue-500" size={24} /></div>
                <div>
                  <h2 className="font-black uppercase text-sm tracking-widest text-blue-800">Budget Achat {isLocked && '(VALIDÉ)'}</h2>
-                 <p className="text-[9px] font-bold text-blue-500 uppercase mt-0.5">Total cumulé HT</p>
+                 <p className="text-[9px] font-bold text-blue-500 uppercase mt-0.5">Total cumulé des fournitures HT</p>
                </div>
              </div>
              <div className="text-right bg-white px-6 py-3 rounded-2xl shadow-sm">
@@ -216,11 +230,7 @@ export default function FournituresPage() {
           </div>
 
           {categoriesConfig.map((cat) => {
-            const catItems = items.filter(i => {
-                if (!i.category) return false;
-                const catLower = i.category.toLowerCase();
-                return cat.keywords.some(keyword => catLower.includes(keyword));
-            });
+            const catItems = items.filter(i => i.category?.toLowerCase() === cat.name.toLowerCase());
 
             return (
               <div key={cat.name} className="bg-white rounded-[2.5rem] border border-slate-100 shadow-sm overflow-hidden mb-6">
@@ -287,11 +297,11 @@ export default function FournituresPage() {
           )}
         </div>
 
-        {/* RÉSUMÉ */}
+        {/* RÉSUMÉ VISUEL */}
         {!showPurchases && (
           <div className="xl:col-span-4">
             <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-xl sticky top-28 space-y-6 text-center">
-              <h3 className="text-[11px] font-black uppercase text-slate-400 tracking-[0.2em]">Synthèse</h3>
+              <h3 className="text-[11px] font-black uppercase text-slate-400 tracking-[0.2em]">Synthèse Fournitures</h3>
               <div className="space-y-6">
                 <div className="flex justify-between items-end border-b border-slate-50 pb-4 text-left">
                   <span className="text-[10px] font-black text-slate-400 uppercase">Total Achat HT</span>
@@ -326,7 +336,7 @@ export default function FournituresPage() {
                   <div className="bg-orange-50/30 p-6 border-b border-orange-50 flex justify-between items-center">
                     <h3 className="font-black text-orange-900 uppercase text-xs">{cat.name}</h3>
                     <button onClick={() => addPurchase(cat.name)} className="text-[10px] bg-orange-100 text-orange-700 px-4 py-2 rounded-xl font-black uppercase hover:bg-orange-600 hover:text-white transition-all shadow-sm">
-                      + Ajouter Facture
+                      + Ajouter Ticket
                     </button>
                   </div>
                   <div className="p-4 space-y-4">
@@ -337,28 +347,21 @@ export default function FournituresPage() {
                         <div key={p.id} className="bg-slate-50/50 p-5 rounded-2xl border border-slate-200 space-y-4">
                           <div className="flex gap-3">
                             <div className="flex-1">
-                                <span className="block text-[8px] font-black uppercase text-slate-400 mb-1 ml-1">Désignation (Ticket)</span>
-                                <input placeholder="Ex: Peinture..." value={p.name} onChange={e => updatePurchase(p.id, 'name', e.target.value)} className="w-full bg-white border border-slate-200 p-3 rounded-xl text-xs font-bold outline-none focus:border-orange-300" />
+                                <input placeholder="Désignation..." value={p.name} onChange={e => updatePurchase(p.id, 'name', e.target.value)} className="w-full bg-white border border-slate-200 p-3 rounded-xl text-xs font-bold outline-none" />
                             </div>
-                            <div className="pt-5">
-                                <button onClick={() => removePurchase(p.id)} className="p-3 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"><Trash2 size={16}/></button>
-                            </div>
+                            <button onClick={() => removePurchase(p.id)} className="p-3 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"><Trash2 size={16}/></button>
                           </div>
                           <div className="flex gap-3 items-end">
                             <div>
-                              <span className="block text-[8px] font-black uppercase text-slate-400 mb-1 ml-1">Qté</span>
+                              <span className="block text-[8px] font-black text-slate-400 mb-1 ml-1 uppercase">Qté</span>
                               <input type="number" value={p.quantity} onChange={e => updatePurchase(p.id, 'quantity', e.target.value)} className="w-16 bg-white border border-slate-200 p-3 rounded-xl text-xs text-center font-black outline-none" />
                             </div>
-                            <div>
-                              <span className="block text-[8px] font-black uppercase text-slate-400 mb-1 ml-1">Prix U. HT</span>
+                            <div className="flex-1">
+                              <span className="block text-[8px] font-black text-slate-400 mb-1 ml-1 uppercase">Prix Unit. HT</span>
                               <div className="flex items-center bg-white border border-slate-200 rounded-xl px-2">
-                                  <input type="number" value={p.unit_price_ht} onChange={e => updatePurchase(p.id, 'unit_price_ht', e.target.value)} className="w-16 p-2 text-xs text-right font-black bg-transparent outline-none" />
+                                  <input type="number" value={p.unit_price_ht} onChange={e => updatePurchase(p.id, 'unit_price_ht', e.target.value)} className="w-full p-2 text-xs text-right font-black bg-transparent outline-none" />
                                   <span className="text-slate-400 text-[10px] font-bold">€</span>
                               </div>
-                            </div>
-                            <div className="flex-1 text-right bg-orange-100/50 border border-orange-200 p-3 rounded-xl flex justify-between items-center">
-                              <span className="text-[9px] font-black uppercase text-orange-600/80">Total Payé HT</span>
-                              <span className="font-black text-orange-700 text-base">{p.total_ht ? parseFloat(p.total_ht).toFixed(2) : '0.00'} €</span>
                             </div>
                           </div>
                         </div>
@@ -373,13 +376,12 @@ export default function FournituresPage() {
             </button>
           </div>
         )}
-
       </div>
 
       {/* MODAL CATALOGUE */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-[2.5rem] w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+          <div className="bg-white rounded-[2.5rem] w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
             <div className="bg-slate-50 p-6 flex justify-between items-center border-b border-slate-100">
               <div className="flex items-center gap-4">
                 <div className="bg-blue-100 text-blue-600 p-3 rounded-2xl"><BookOpen size={20} /></div>
@@ -397,11 +399,11 @@ export default function FournituresPage() {
               {getCatalogueForCategory(activeCategoryForModal).length === 0 ? (
                 <div className="text-center py-20">
                   <Package className="mx-auto text-slate-300 mb-4" size={48} />
-                  <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Aucune fourniture enregistrée.</p>
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Aucun article enregistré.</p>
                 </div>
               ) : (
                 getCatalogueForCategory(activeCategoryForModal).map((catItem: any, index: number) => (
-                  <div key={index} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col sm:flex-row justify-between sm:items-center gap-4 group hover:border-blue-300 hover:shadow-md transition-all cursor-pointer" onClick={() => addItemFromCatalogue(catItem)}>
+                  <div key={index} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col sm:flex-row justify-between sm:items-center gap-4 group hover:border-blue-300 transition-all cursor-pointer" onClick={() => addItemFromCatalogue(catItem)}>
                     <div>
                       <p className="font-bold text-slate-800 text-sm group-hover:text-blue-600 transition-colors">{catItem.name}</p>
                       <div className="flex items-center gap-2 mt-1">
@@ -410,7 +412,7 @@ export default function FournituresPage() {
                     </div>
                     <button 
                       onClick={(e) => { e.stopPropagation(); addItemFromCatalogue(catItem); }}
-                      className="bg-slate-900 text-white px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest group-hover:bg-blue-600 transition-all flex items-center justify-center gap-2"
+                      className="bg-slate-900 text-white px-5 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all flex items-center justify-center gap-2"
                     >
                       <Plus size={14} /> Ajouter
                     </button>
