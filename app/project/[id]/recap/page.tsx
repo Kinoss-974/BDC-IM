@@ -24,14 +24,12 @@ export default function RecapPage() {
 
   const fetchData = async () => {
     try {
-      // 1. Récupération du rôle utilisateur
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single();
         setUserRole(profile?.role || 'DECORATRICE');
       }
 
-      // 2. Récupération des données
       const { data: proj } = await supabase.from('projects').select('*').eq('id', projectId).single();
       const { data: grid } = await supabase.from('pricing_grids').select('*');
       const { data: settings } = await supabase.from('global_settings').select('*');
@@ -67,7 +65,6 @@ export default function RecapPage() {
   };
 
   const updateProject = async (updates: any) => {
-    // Sécurité supplémentaire : on bloque l'update si verrouillé et non admin
     const statusBlocked = ['devis_valide', 'devis_traite', 'termine'].includes(project.status);
     if (statusBlocked && userRole !== 'ADMIN') return;
 
@@ -110,20 +107,61 @@ export default function RecapPage() {
 
   const isAdmin = userRole === 'ADMIN';
   const isFinished = project.status === 'termine';
-  // Le verrouillage pour les décoratrices s'applique dès 'devis_valide'
   const isLockedForDecorator = ['devis_valide', 'devis_traite', 'termine'].includes(project.status);
   const showPurchases = ['devis_valide', 'devis_traite', 'termine'].includes(project.status);
-
   const activeMargin = parseFloat(project.margin) || globalMargin;
 
+  // ==========================================
+  // NOUVEAU : CALCULS DES BUDGETS EXTRAITS
+  // ==========================================
+  
+  // 1. Fournitures
+  const chiffrageFournitures = getLotTotalChiffrage('Fourniture');
+  const budgetFournitures = chiffrageFournitures;
+  const venteFournitures = chiffrageFournitures * activeMargin;
+
+  // 2. Cuisine
+  const chiffrageCuisine = getLotTotalChiffrage('Cuisine');
+  const forfaitCuisine = getGridPrice('CUISINE', 'Forfait', project.property_type);
+  const budgetCuisine = project.is_cuisine_cuisiniste ? 0 : (chiffrageCuisine > 0 ? chiffrageCuisine : forfaitCuisine / activeMargin);
+  const venteCuisine = project.is_cuisine_cuisiniste ? 0 : (chiffrageCuisine > 0 ? chiffrageCuisine * activeMargin : forfaitCuisine);
+
+  // 3. Électroménager
+  const chiffrageElectro = getLotTotalChiffrage('Electro');
+  const forfaitElectro = getGridPrice('ELECTRO', 'Pack Complet', project.property_type);
+  const budgetElectro = project.is_electro_cuisiniste ? 0 : (chiffrageElectro > 0 ? chiffrageElectro : forfaitElectro / activeMargin);
+  const venteElectro = project.is_electro_cuisiniste ? 0 : (chiffrageElectro > 0 ? chiffrageElectro * activeMargin : forfaitElectro);
+
+  // 4. Ameublement (Avec prise en compte du Budget Complémentaire)
+  const chiffrageAmeublement = getLotTotalChiffrage('Ameublement');
+  const forfaitAmeublement = getGridPrice('AMEUBLEMENT', project.package_type, project.property_type);
+  const extraBudgetAmeublement = parseFloat(project.extra_budget_ameublement) || 0; // Le budget de la page ameublement
+  
+  const budgetAmeublement = chiffrageAmeublement > 0 
+    ? chiffrageAmeublement 
+    : (forfaitAmeublement / activeMargin) + extraBudgetAmeublement;
+    
+  const venteAmeublement = chiffrageAmeublement > 0 
+    ? chiffrageAmeublement * activeMargin 
+    : forfaitAmeublement + (extraBudgetAmeublement * activeMargin);
+
+  // 5. Prestations sans marge
+  const budgetLivraison = getGridPrice('LIVRAISON', 'Standard', project.property_type);
+  const budgetMontage = getGridPrice('MO_PACKAGE', project.product_type === "RENO'MALIN" ? "RENO" : "IMMO/DECO", project.property_type);
+  const budgetSurMesure = getGridPrice('MO_SUR_MESURE', project.mo_level, project.property_type);
+
+  // ==========================================
+  // CONFIGURATION DES LIGNES DU TABLEAU
+  // ==========================================
+
   const rows = [
-    { label: 'Fournitures', icon: Calculator, budget: getLotTotalChiffrage('Fourniture'), vente: getLotTotalChiffrage('Fourniture') * activeMargin, depense: getLotTotalAchatReel('Fourniture'), color: 'bg-blue-600' },
-    { label: 'Cuisine', icon: ChefHat, budget: project.is_cuisine_cuisiniste ? 0 : (getLotTotalChiffrage('Cuisine') || getGridPrice('CUISINE', 'Forfait', project.property_type) / activeMargin), vente: project.is_cuisine_cuisiniste ? 0 : (getLotTotalChiffrage('Cuisine') * activeMargin || getGridPrice('CUISINE', 'Forfait', project.property_type)), depense: getLotTotalAchatReel('Cuisine'), color: 'bg-orange-500' },
-    { label: 'Électroménager', icon: Tv, budget: project.is_electro_cuisiniste ? 0 : (getLotTotalChiffrage('Electro') || getGridPrice('ELECTRO', 'Pack Complet', project.property_type) / activeMargin), vente: project.is_electro_cuisiniste ? 0 : (getLotTotalChiffrage('Electro') * activeMargin || getGridPrice('ELECTRO', 'Pack Complet', project.property_type)), depense: getLotTotalAchatReel('Electro'), color: 'bg-purple-500' },
-    { label: 'Ameublement', icon: Package, budget: (getLotTotalChiffrage('Ameublement') || getGridPrice('AMEUBLEMENT', project.package_type, project.property_type) / activeMargin), vente: (getLotTotalChiffrage('Ameublement') * activeMargin || getGridPrice('AMEUBLEMENT', project.package_type, project.property_type)), depense: getLotTotalAchatReel('Ameublement'), color: 'bg-indigo-600' },
-    { label: 'Logistique', icon: Truck, budget: getGridPrice('LIVRAISON', 'Standard', project.property_type), vente: getGridPrice('LIVRAISON', 'Standard', project.property_type), depense: getLotTotalAchatReel('Livraison'), color: 'bg-slate-500' },
-    { label: 'Montage', icon: Wrench, budget: getGridPrice('MO_PACKAGE', project.product_type === "RENO'MALIN" ? "RENO" : "IMMO/DECO", project.property_type), vente: getGridPrice('MO_PACKAGE', project.product_type === "RENO'MALIN" ? "RENO" : "IMMO/DECO", project.property_type), depense: getLotTotalAchatReel('Montage'), color: 'bg-slate-500' },
-    { label: 'Main d’œuvre', icon: Ruler, budget: getGridPrice('MO_SUR_MESURE', project.mo_level, project.property_type), vente: getGridPrice('MO_SUR_MESURE', project.mo_level, project.property_type), depense: getLotTotalAchatReel('Main'), color: 'bg-slate-500' }
+    { label: 'Fournitures', icon: Calculator, budget: budgetFournitures, vente: venteFournitures, depense: getLotTotalAchatReel('Fourniture'), color: 'bg-blue-600' },
+    { label: 'Cuisine', icon: ChefHat, budget: budgetCuisine, vente: venteCuisine, depense: getLotTotalAchatReel('Cuisine'), color: 'bg-orange-500' },
+    { label: 'Électroménager', icon: Tv, budget: budgetElectro, vente: venteElectro, depense: getLotTotalAchatReel('Electro'), color: 'bg-purple-500' },
+    { label: 'Ameublement', icon: Package, budget: budgetAmeublement, vente: venteAmeublement, depense: getLotTotalAchatReel('Ameublement'), color: 'bg-indigo-600' },
+    { label: 'Logistique', icon: Truck, budget: budgetLivraison, vente: budgetLivraison, depense: getLotTotalAchatReel('Livraison'), color: 'bg-slate-500' },
+    { label: 'Montage', icon: Wrench, budget: budgetMontage, vente: budgetMontage, depense: getLotTotalAchatReel('Montage'), color: 'bg-slate-500' },
+    { label: 'Main d’œuvre', icon: Ruler, budget: budgetSurMesure, vente: budgetSurMesure, depense: getLotTotalAchatReel('Main'), color: 'bg-slate-500' }
   ];
 
   const totalVenteHT = rows.reduce((acc, row) => acc + row.vente, 0);
@@ -151,14 +189,12 @@ export default function RecapPage() {
             <h1 className="text-3xl font-black text-slate-900 tracking-tighter uppercase italic">Synthèse du Projet</h1>
           </div>
           <div className="flex gap-3">
-            {/* BOUTON CLOTURER : Visible si phase achat et non terminé */}
             {(project.status === 'devis_valide' || project.status === 'devis_traite') && (
               <button onClick={handleFinishProject} className="flex items-center gap-2 px-6 py-3.5 bg-emerald-600 text-white rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl hover:bg-emerald-700 transition-all">
                 <CheckCircle2 size={16} /> Clôturer le dossier
               </button>
             )}
 
-            {/* BOUTON ADMIN REOUVRIR : Uniquement pour ADMIN si terminé */}
             {isFinished && isAdmin && (
               <button onClick={handleUnlockProject} className="flex items-center gap-2 px-6 py-3.5 bg-red-600 text-white rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl hover:bg-red-700 transition-all">
                 <Unlock size={16} /> Admin : Réouvrir
@@ -173,8 +209,14 @@ export default function RecapPage() {
 
         {/* INFO CARD */}
         <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-xl shadow-slate-200/50 flex flex-col md:flex-row justify-between items-center gap-8 recap-card relative">
+          {isFinished && (
+            <div className="absolute -top-4 -right-4 bg-emerald-500 text-white p-3 rounded-2xl shadow-lg rotate-12 z-10 no-print">
+              <CheckCircle2 size={24} />
+            </div>
+          )}
+
           <div className="flex items-center gap-6">
-            <div className={`w-16 h-16 ${isFinished ? 'bg-emerald-600' : 'bg-slate-900'} rounded-[1.5rem] flex items-center justify-center text-white shadow-2xl transition-all`}>
+            <div className={`w-16 h-16 ${isFinished ? 'bg-emerald-600' : 'bg-slate-900'} rounded-[1.5rem] flex items-center justify-center text-white shadow-2xl transition-colors`}>
               {isFinished ? <CheckCircle2 size={28} /> : <Briefcase size={28} />}
             </div>
             <div>

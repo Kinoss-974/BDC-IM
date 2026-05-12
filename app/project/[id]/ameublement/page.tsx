@@ -6,7 +6,7 @@ import { supabase } from '../../../../lib/supabase';
 import { 
   Plus, Trash2, Save, Loader2, Package, 
   RefreshCw, BookOpen, X, Sofa, ChefHat, 
-  Droplets, Home, Wrench, Paintbrush, Lightbulb, Calculator, ShoppingBag, Info
+  Droplets, Home, Wrench, Paintbrush, Lightbulb, Calculator, ShoppingBag, Info, Coins
 } from 'lucide-react';
 
 export default function AmeublementPage() {
@@ -17,10 +17,13 @@ export default function AmeublementPage() {
   const [items, setItems] = useState<any[]>([]); // Chiffrage
   const [purchases, setPurchases] = useState<any[]>([]); // Achats réels
   const [fullCatalogue, setFullCatalogue] = useState<any[]>([]);
-  const [forfaitPrice, setForfaitPrice] = useState(0); // NOUVEAU : Stocke le forfait de vente
+  const [forfaitPrice, setForfaitPrice] = useState(0); 
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isSavingPurchases, setIsSavingPurchases] = useState(false);
+
+  // NOUVEAU : État pour le budget complémentaire
+  const [extraBudget, setExtraBudget] = useState(0);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeCategoryForModal, setActiveCategoryForModal] = useState<string>('');
@@ -63,7 +66,9 @@ export default function AmeublementPage() {
       setProject(proj);
 
       if (proj) {
-        // NOUVEAU : On récupère le forfait de vente pour calculer le budget d'achat
+        // Chargement de l'extra budget s'il existe
+        setExtraBudget(parseFloat(proj.extra_budget_ameublement) || 0);
+
         if (gridData) {
           const forfait = gridData.find(p => p.property_type === proj.property_type && p.sub_category === proj.package_type);
           setForfaitPrice(parseFloat(forfait?.price) || 0);
@@ -85,6 +90,11 @@ export default function AmeublementPage() {
       }
     } catch (err) { console.error(err); }
     setLoading(false);
+  };
+
+  const updateExtraBudget = async (newVal: number) => {
+    setExtraBudget(newVal);
+    await supabase.from('projects').update({ extra_budget_ameublement: newVal }).eq('id', projectId);
   };
 
   // --- GESTION CHIFFRAGE ---
@@ -138,13 +148,12 @@ export default function AmeublementPage() {
 
   if (loading) return <div className="flex justify-center p-20"><Loader2 className="animate-spin text-blue-600" size={40} /></div>;
 
-  // LOGIQUES FINANCIÈRES
-  const isLocked = project?.status === 'devis_valide' || project?.status === 'devis_traite';
+  const isLocked = project?.status === 'devis_valide' || project?.status === 'devis_traite' || project?.status === 'termine';
   const showPurchases = isLocked;
   const margin = parseFloat(project?.margin) || 1.25;
 
-  // Le Budget Achat autorisé correspond au forfait de vente divisé par la marge
-  const budgetAchatMax = forfaitPrice / margin;
+  // BUDGET : On ajoute l'extra budget (qui est déjà en achat) au budget généré par le forfait
+  const budgetAchatMax = (forfaitPrice / margin) + extraBudget;
   
   const totalAchatEstime = items.reduce((acc, item) => acc + ((parseFloat(item.unit_price) || 0) * (parseFloat(item.quantity_to_cover) || 0)), 0);
   const totalAchatReel = purchases.reduce((acc, p) => acc + (parseFloat(p.total_ht) || 0), 0);
@@ -168,7 +177,7 @@ export default function AmeublementPage() {
             <div className="bg-blue-600 p-5 rounded-[2rem] shadow-lg shadow-blue-500/20"><Sofa size={32} /></div>
             <div>
               <h1 className="text-3xl font-black uppercase tracking-tighter italic">Ameublement</h1>
-              <p className="text-blue-400 text-[10px] font-bold uppercase tracking-[0.2em] mt-1">{project?.name} | Statut: {project?.status || 'Brouillon'}</p>
+              <p className="text-blue-400 text-[10px] font-bold uppercase tracking-[0.2em] mt-1">{project?.name} | Statut: {project?.status?.replace(/_/g, ' ') || 'Brouillon'}</p>
             </div>
           </div>
           <div className="flex flex-wrap gap-3">
@@ -191,13 +200,12 @@ export default function AmeublementPage() {
         {/* ================= COLONNE GAUCHE : CHIFFRAGE ================= */}
         <div className={`${showPurchases ? '' : 'xl:col-span-8'} space-y-6`}>
           
-          {/* HEADER BUDGET */}
           <div className="flex flex-col md:flex-row items-center justify-between mb-2 bg-blue-50 p-6 rounded-3xl border border-blue-100 shadow-sm gap-4">
              <div className="flex items-center gap-4">
                <div className="bg-white p-3 rounded-2xl shadow-sm"><Calculator className="text-blue-500" size={24} /></div>
                <div>
                  <h2 className="font-black uppercase text-sm tracking-widest text-blue-800">Budget Achat {isLocked && '(FIGÉ)'}</h2>
-                 <p className="text-[9px] font-bold text-blue-500 uppercase mt-0.5">Calculé selon le forfait client (- Marge)</p>
+                 <p className="text-[9px] font-bold text-blue-500 uppercase mt-0.5">Calculé selon le forfait client (- Marge) + Budget Complémentaire</p>
                </div>
              </div>
              <div className="text-right bg-white px-6 py-3 rounded-2xl shadow-sm">
@@ -205,7 +213,6 @@ export default function AmeublementPage() {
              </div>
           </div>
 
-          {/* ALERTE DÉPASSEMENT BUDGET */}
           {!isLocked && (
             <div className="flex justify-between items-center px-4 mb-2">
                <span className="text-[10px] font-black text-slate-400 uppercase">Total de vos meubles chiffrés :</span>
@@ -217,7 +224,7 @@ export default function AmeublementPage() {
             <div className="bg-red-50 p-5 rounded-2xl border border-red-100 flex gap-4 items-center mb-6 animate-in fade-in zoom-in duration-300">
               <Info className="text-red-500 shrink-0" size={24} />
               <p className="text-xs font-bold text-red-700 leading-relaxed">
-                Action requise : Le total des meubles que vous avez ajoutés ({Math.round(totalAchatEstime)} €) dépasse le budget d'achat autorisé ({Math.round(budgetAchatMax)} €). Veuillez ajuster vos quantités ou références.
+                Action requise : Le total des meubles que vous avez ajoutés ({Math.round(totalAchatEstime)} €) dépasse le budget d'achat autorisé ({Math.round(budgetAchatMax)} €). Ajustez vos quantités ou ajoutez un budget complémentaire.
               </p>
             </div>
           )}
@@ -296,23 +303,48 @@ export default function AmeublementPage() {
           )}
         </div>
 
-        {/* ================= COLONNE CENTRALE (RÉSUMÉ) : Uniquement si non validé ================= */}
+        {/* ================= COLONNE CENTRALE (RÉSUMÉ) ================= */}
         {!showPurchases && (
           <div className="xl:col-span-4">
             <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-xl sticky top-28 space-y-6 text-center">
-              <h3 className="text-[11px] font-black uppercase text-slate-400 tracking-[0.2em]">Synthèse</h3>
+              <h3 className="text-[11px] font-black uppercase text-slate-400 tracking-[0.2em]">Synthèse & Budget</h3>
+              
               <div className="space-y-6">
                 <div className="flex justify-between items-end border-b border-slate-50 pb-4 text-left">
                   <span className="text-[10px] font-black text-slate-400 uppercase">Budget Alloué HT</span>
                   <span className="font-bold text-slate-700 text-lg">{Math.round(budgetAchatMax).toLocaleString()} €</span>
                 </div>
+
+                {/* BLOC BUDGET COMPLÉMENTAIRE */}
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 text-left">
+                  <label className="text-[9px] font-black uppercase text-slate-500 flex items-center gap-1.5 mb-2">
+                    <Coins size={12} className="text-blue-500" />
+                    Budget Complémentaire Achat HT
+                  </label>
+                  <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-2 shadow-sm focus-within:border-blue-500 focus-within:ring-2 ring-blue-100 transition-all">
+                    <input 
+                      type="number" 
+                      value={extraBudget} 
+                      onChange={(e) => updateExtraBudget(parseFloat(e.target.value) || 0)}
+                      disabled={isLocked}
+                      className="w-full text-sm font-black outline-none bg-transparent disabled:text-slate-400" 
+                      placeholder="Ex: 500"
+                    />
+                    <span className="text-slate-400 font-bold text-xs ml-2">€</span>
+                  </div>
+                  <p className="text-[8px] text-slate-400 mt-2 italic leading-tight">
+                    S'ajoute au budget achat alloué automatiquement pour couvrir les demandes spécifiques du client.
+                  </p>
+                </div>
+
                 <div className="flex justify-between items-end border-b border-slate-50 pb-4 text-left">
                   <span className="text-[10px] font-black text-slate-400 uppercase">Total Chiffré HT</span>
                   <span className={`font-bold text-lg ${totalAchatEstime > budgetAchatMax ? 'text-red-500' : 'text-slate-700'}`}>{Math.round(totalAchatEstime).toLocaleString()} €</span>
                 </div>
+                
                 <div className="p-8 bg-blue-600 rounded-[2rem] text-white shadow-lg relative overflow-hidden">
                   <span className="text-[10px] font-black uppercase opacity-60">Forfait Client (Vente HT)</span>
-                  <div className="text-5xl font-black italic tracking-tighter mt-1">{Math.round(forfaitPrice).toLocaleString()} €</div>
+                  <div className="text-5xl font-black italic tracking-tighter mt-1">{Math.round(forfaitPrice + (extraBudget * margin)).toLocaleString()} €</div>
                 </div>
               </div>
               <button onClick={() => fetchData(true)} className="w-full text-slate-300 hover:text-orange-600 font-bold text-[9px] uppercase tracking-widest flex justify-center items-center gap-2 transition-colors border-t border-slate-50 pt-4">
@@ -322,7 +354,7 @@ export default function AmeublementPage() {
           </div>
         )}
 
-        {/* ================= COLONNE DROITE : ACHATS RÉELS (Uniquement si validé) ================= */}
+        {/* ================= COLONNE DROITE : ACHATS RÉELS ================= */}
         {showPurchases && (
           <div className="space-y-6">
             <div className="flex items-center gap-3 mb-6 bg-orange-50 p-4 rounded-2xl border border-orange-100">
